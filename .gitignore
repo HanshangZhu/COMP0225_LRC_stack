@@ -1,0 +1,20 @@
+# Build artifacts
+/build/
+/install/
+/log/
+
+# Editor/IDE
+/.vscode/
+/.agent/
+
+# Python cache
+**/__pycache__/
+*.pyc
+
+# Local debug artifacts
+*.log
+*.gv
+*.pdf
+
+# ROS logs
+/.ros/

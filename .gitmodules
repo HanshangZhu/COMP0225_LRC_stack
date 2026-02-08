@@ -1,0 +1,6 @@
+[submodule "src/autonomy_stack_go2"]
+	path = src/autonomy_stack_go2
+	url = https://github.com/jizhang-cmu/autonomy_stack_go2.git
+[submodule "src/unitree-go2-ros2"]
+	path = src/unitree-go2-ros2
+	url = https://github.com/anujjain-dev/unitree-go2-ros2.git
