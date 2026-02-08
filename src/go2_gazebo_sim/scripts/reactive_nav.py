@@ -37,6 +37,13 @@ class ReactiveNav(Node):
         self.declare_parameter("avoidance_gain", 1.5)       # lateral push strength
         self.declare_parameter("control_rate", 10.0)        # Hz
         self.declare_parameter("startup_delay", 15.0)       # seconds before driving
+        self.declare_parameter("require_settle_before_motion", True)  # wait for stand-up drift to settle
+        self.declare_parameter("settle_speed_threshold", 0.06)         # m/s threshold for "still"
+        self.declare_parameter("settle_hold_sec", 2.0)                 # must stay still for this long
+        self.declare_parameter("avoidance_deadband", 0.08)             # ignore tiny left/right imbalance
+        self.declare_parameter("avoidance_max_ratio", 0.45)            # cap avoidance as fraction of max yaw rate
+        self.declare_parameter("avoidance_conflict_scale", 0.30)       # down-weight avoidance if it fights goal turn
+        self.declare_parameter("turn_in_place_on_block", True)         # when blocked, turn by goal heading only
 
         self.max_lin = float(self.get_parameter("max_linear_speed").value)
         self.max_ang = float(self.get_parameter("max_angular_speed").value)
@@ -48,6 +55,13 @@ class ReactiveNav(Node):
         self.avoid_gain = float(self.get_parameter("avoidance_gain").value)
         self.rate = float(self.get_parameter("control_rate").value)
         self.startup_delay = float(self.get_parameter("startup_delay").value)
+        self.require_settle = bool(self.get_parameter("require_settle_before_motion").value)
+        self.settle_speed_threshold = float(self.get_parameter("settle_speed_threshold").value)
+        self.settle_hold_sec = float(self.get_parameter("settle_hold_sec").value)
+        self.avoidance_deadband = float(self.get_parameter("avoidance_deadband").value)
+        self.avoidance_max_ratio = float(self.get_parameter("avoidance_max_ratio").value)
+        self.avoidance_conflict_scale = float(self.get_parameter("avoidance_conflict_scale").value)
+        self.turn_in_place_on_block = bool(self.get_parameter("turn_in_place_on_block").value)
 
         # --- state ---------------------------------------------------------
         self.goal_x: Optional[float] = None        # goal in odom frame
@@ -55,8 +69,11 @@ class ReactiveNav(Node):
         self.robot_x = 0.0                          # position in odom frame
         self.robot_y = 0.0
         self.robot_yaw = 0.0                        # heading in odom frame
+        self.robot_speed = float("inf")             # planar speed (m/s)
         self.last_scan: Optional[LaserScan] = None
         self.start_time = None                       # set on first timer fire
+        self.settle_start_time = None                # first timestamp below speed threshold
+        self.settle_ready = False                    # one-shot startup settle gate
 
         # --- subscribers ---------------------------------------------------
         self.create_subscription(PointStamped, "/way_point", self.goal_cb, 10)
@@ -86,6 +103,9 @@ class ReactiveNav(Node):
         siny = 2.0 * (q.w * q.z + q.x * q.y)
         cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
         self.robot_yaw = math.atan2(siny, cosy)
+        vx = msg.twist.twist.linear.x
+        vy = msg.twist.twist.linear.y
+        self.robot_speed = math.hypot(vx, vy)
 
     def scan_cb(self, msg: LaserScan):
         self.last_scan = msg                         # store latest scan
@@ -99,6 +119,31 @@ class ReactiveNav(Node):
         if elapsed < self.startup_delay:
             self._publish_zero()                     # hold still while waiting
             return
+
+        # --- wait until stand-up transients settle ---
+        if self.require_settle and not self.settle_ready:
+            now = self.get_clock().now()
+            if self.robot_speed > self.settle_speed_threshold:
+                self.settle_start_time = None
+                self._publish_zero()
+                return
+
+            if self.settle_start_time is None:
+                self.settle_start_time = now
+                self._publish_zero()
+                return
+
+            settle_elapsed = (now - self.settle_start_time).nanoseconds / 1e9
+            if settle_elapsed < self.settle_hold_sec:
+                self._publish_zero()
+                return
+
+            if not self.settle_ready:
+                self.settle_ready = True
+                self.get_logger().info(
+                    f"Settle gate passed (speed<{self.settle_speed_threshold:.2f} m/s "
+                    f"for {self.settle_hold_sec:.1f}s)."
+                )
 
         # --- no goal yet → hold still ---
         if self.goal_x is None or self.goal_y is None:
@@ -125,8 +170,10 @@ class ReactiveNav(Node):
         # --- scan-based obstacle analysis ---
         scan = self.last_scan
         min_front = float("inf")                     # closest obstacle in front cone
-        left_push = 0.0                              # repulsive force from left
-        right_push = 0.0                             # repulsive force from right
+        left_push_sum = 0.0                          # repulsive force sum from left
+        right_push_sum = 0.0                         # repulsive force sum from right
+        left_count = 0
+        right_count = 0
 
         angle = scan.angle_min
         for r in scan.ranges:
@@ -143,11 +190,17 @@ class ReactiveNav(Node):
             if abs_a < self.side_half and r < self.slow_dist:
                 force = (self.slow_dist - r) / self.slow_dist  # 0..1
                 if angle > 0:                        # obstacle on the left
-                    left_push += force
+                    left_push_sum += force
+                    left_count += 1
                 else:                                # obstacle on the right
-                    right_push += force
+                    right_push_sum += force
+                    right_count += 1
 
             angle += scan.angle_increment
+
+        # Average per-side force is less jittery than raw sums when ray count changes.
+        left_push = left_push_sum / left_count if left_count > 0 else 0.0
+        right_push = right_push_sum / right_count if right_count > 0 else 0.0
 
         # --- compute linear speed ---
         lin = self.max_lin
@@ -168,12 +221,25 @@ class ReactiveNav(Node):
 
         # --- compute angular speed ---
         # base: turn toward goal
-        ang = self.max_ang * (2.0 / math.pi) * heading_err  # P-controller
-        ang = max(-self.max_ang, min(ang, self.max_ang))
+        goal_turn = self.max_ang * (2.0 / math.pi) * heading_err  # P-controller
+        goal_turn = max(-self.max_ang, min(goal_turn, self.max_ang))
 
-        # add obstacle avoidance bias
-        avoid_yaw = self.avoid_gain * (right_push - left_push)  # push away from closer side
-        ang += avoid_yaw
+        # add obstacle avoidance bias with explicit conflict limiting.
+        avoid_raw = right_push - left_push  # push away from closer side
+        if abs(avoid_raw) < self.avoidance_deadband:
+            avoid_raw = 0.0
+        avoid_yaw = self.avoid_gain * avoid_raw
+
+        if min_front < self.stop_dist and self.turn_in_place_on_block:
+            # When blocked ahead, prioritize turning toward the goal direction.
+            avoid_yaw = 0.0
+        elif avoid_yaw * heading_err < 0.0:
+            avoid_yaw *= self.avoidance_conflict_scale
+
+        max_avoid = max(0.0, self.avoidance_max_ratio) * self.max_ang
+        avoid_yaw = max(-max_avoid, min(avoid_yaw, max_avoid))
+
+        ang = goal_turn + avoid_yaw
         ang = max(-self.max_ang, min(ang, self.max_ang))
 
         # --- publish ---

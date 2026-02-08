@@ -210,6 +210,8 @@ def generate_launch_description():
             'selection_mode': 'score',
             'goal_hysteresis_distance': 0.35,
             'goal_hold_sec': 3.0,
+            'goal_reselect_distance': 0.7,
+            'max_goal_distance': 4.0,
             'obstacle_clearance_cells': 2,
             'startup_delay': 12.0,          # let robot stand up + autonomy enable first
             'frontier_goal_topic': '/way_point',
@@ -281,8 +283,9 @@ def generate_launch_description():
         parameters=[{
             'use_sim_time': True,
             'min_frontier_distance': 1.0,
-            'trigger_stop_duration': 0.8,
-            'cooldown_sec': 3.0,
+            # Less eager recovery to avoid oscillatory goal flips near walls.
+            'trigger_stop_duration': 1.5,
+            'cooldown_sec': 6.0,
             'publish_rate': 2.0,
         }],
         output='screen',
@@ -316,6 +319,13 @@ def generate_launch_description():
             'avoidance_gain': 0.9,          # lateral repulsion strength
             'control_rate': 15.0,           # Hz
             'startup_delay': 12.0,          # wait for stand-up + frontier goal
+            'require_settle_before_motion': True,
+            'settle_speed_threshold': 0.12,
+            'settle_hold_sec': 1.5,
+            'avoidance_deadband': 0.08,
+            'avoidance_max_ratio': 0.45,
+            'avoidance_conflict_scale': 0.30,
+            'turn_in_place_on_block': True,
         }],
         output='screen',
     )

@@ -67,6 +67,8 @@ class GeometricFrontier(Node):
         self.declare_parameter("selection_mode", "nearest")
         self.declare_parameter("goal_hysteresis_distance", 0.0)
         self.declare_parameter("goal_hold_sec", 0.0)
+        self.declare_parameter("goal_reselect_distance", 0.8)
+        self.declare_parameter("max_goal_distance", 4.0)
         self.declare_parameter("obstacle_clearance_cells", 1)
         self.declare_parameter("startup_delay", 10.0)        # seconds before publishing goals
         self.declare_parameter("frontier_goal_topic", "/way_point")
@@ -88,6 +90,8 @@ class GeometricFrontier(Node):
         self.selection_mode = self.get_parameter("selection_mode").value
         self.goal_hysteresis_distance = float(self.get_parameter("goal_hysteresis_distance").value)
         self.goal_hold_sec = float(self.get_parameter("goal_hold_sec").value)
+        self.goal_reselect_distance = float(self.get_parameter("goal_reselect_distance").value)
+        self.max_goal_distance = float(self.get_parameter("max_goal_distance").value)
         self.obstacle_clearance_cells = int(self.get_parameter("obstacle_clearance_cells").value)
         self.startup_delay = float(self.get_parameter("startup_delay").value)
         self.frontier_goal_topic = self.get_parameter("frontier_goal_topic").value
@@ -334,6 +338,16 @@ class GeometricFrontier(Node):
             return
         robot_x = odom.pose.pose.position.x
         robot_y = odom.pose.pose.position.y
+
+        # Keep the current goal until we're close, to prevent zig-zag retargeting.
+        if self.last_goal is not None and self.goal_reselect_distance > 0.0:
+            dist_to_last_goal = math.hypot(
+                self.last_goal[0] - robot_x,
+                self.last_goal[1] - robot_y,
+            )
+            if dist_to_last_goal > self.goal_reselect_distance:
+                return
+
         best = None
         best_dist = 1e9
         best_size = -1
@@ -348,6 +362,11 @@ class GeometricFrontier(Node):
             cx = sx / len(cluster)
             cy = sy / len(cluster)
             dist = math.hypot(cx - robot_x, cy - robot_y)
+
+            # Refuse long-distance goal flips that create turn-back behavior.
+            if self.max_goal_distance > 0.0 and dist > self.max_goal_distance:
+                continue
+
             size = len(cluster)
             score = size / max(dist, 0.1)
             if self.selection_mode == "largest":
@@ -364,6 +383,7 @@ class GeometricFrontier(Node):
                 if dist < best_dist:
                     best_dist = dist
                     best = (cx, cy)
+
         if best is None:
             return
 
