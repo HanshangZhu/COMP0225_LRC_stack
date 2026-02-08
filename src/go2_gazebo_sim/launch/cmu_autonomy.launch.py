@@ -205,9 +205,11 @@ def generate_launch_description():
             'max_range': 6.0,
             'update_rate': 0.5,
             'frontier_min_size': 10,
-            'selection_mode': 'largest',
-            'goal_hysteresis_distance': 0.5,
-            'goal_hold_sec': 2.0,
+            # Smoother heading behavior: prefer sizeable but not-too-far goals,
+            # and avoid retargeting too frequently.
+            'selection_mode': 'score',
+            'goal_hysteresis_distance': 0.35,
+            'goal_hold_sec': 3.0,
             'obstacle_clearance_cells': 2,
             'startup_delay': 12.0,          # let robot stand up + autonomy enable first
             'frontier_goal_topic': '/way_point',
@@ -305,14 +307,28 @@ def generate_launch_description():
             'use_sim_time': True,
             'max_linear_speed': 0.35,       # m/s — gentle corridor speed
             'max_angular_speed': 0.8,       # rad/s — responsive turning
-            'goal_tolerance': 0.8,          # m — close enough to goal
+            # Keep tight so we don't early-stop short of each frontier centroid.
+            'goal_tolerance': 0.1,          # m — close enough to goal
             'obstacle_slow_dist': 0.6,      # m — start slowing near walls
             'obstacle_stop_dist': 0.25,     # m — hard stop distance
-            'front_half_angle_deg': 40.0,   # degrees — front cone for speed limit
-            'side_check_angle_deg': 70.0,   # degrees — side zone for push
-            'avoidance_gain': 1.5,          # lateral repulsion strength
-            'control_rate': 10.0,           # Hz
+            'front_half_angle_deg': 35.0,   # degrees — front cone for speed limit
+            'side_check_angle_deg': 50.0,   # degrees — side zone for push
+            'avoidance_gain': 0.9,          # lateral repulsion strength
+            'control_rate': 15.0,           # Hz
             'startup_delay': 12.0,          # wait for stand-up + frontier goal
+        }],
+        output='screen',
+    )
+
+    # Publish synthetic /joy so autonomy mode is enabled without a joystick.
+    autonomy_enabler_node = Node(
+        package='go2_gazebo_sim',
+        executable='autonomy_enabler.py',
+        name='autonomy_enabler',
+        parameters=[{
+            'use_sim_time': True,
+            'startup_delay': 15.0,
+            'rate': 10.0,
         }],
         output='screen',
     )
@@ -328,6 +344,7 @@ def generate_launch_description():
             geometric_frontier_node,
             gazebo_frontier_visual_node,
             motion_monitor_node,
+            autonomy_enabler_node,
             reactive_nav_node,
         ]
     )

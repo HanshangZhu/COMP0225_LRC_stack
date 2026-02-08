@@ -5,12 +5,15 @@ in autonomy mode.  Both nodes check joy->axes[2] <= -0.1 to enable
 autonomyMode.  Without a physical joystick this never happens, so the
 entire navigation stack sits idle.
 
-This node waits for the robot to stand up (startup_delay), then
-publishes /joy at 10 Hz with axes[2] = -1.0.
+This node waits for BOTH:
+  1. startup_delay seconds (robot stand-up), AND
+  2. at least one /way_point message (frontier goal ready)
+before publishing /joy at 10 Hz with axes[2] = -1.0.
 """
 import rclpy                          # ROS 2 Python client library
 from rclpy.node import Node           # base Node class
 from sensor_msgs.msg import Joy       # joystick message type
+from geometry_msgs.msg import PointStamped  # waypoint message type
 
 
 class AutonomyEnabler(Node):
@@ -25,7 +28,13 @@ class AutonomyEnabler(Node):
 
         # --- state ------------------------------------------------------
         self.start_time = None                           # set on first timer callback
-        self.enabled = False                             # set True after delay
+        self.enabled = False                             # set True after both conditions met
+        self.goal_received = False                       # set True on first /way_point
+
+        # --- subscriber (wait for frontier goal) -------------------------
+        self.create_subscription(
+            PointStamped, "/way_point", self.waypoint_cb, 10
+        )
 
         # --- publisher --------------------------------------------------
         self.joy_pub = self.create_publisher(Joy, "/joy", 10)
@@ -34,8 +43,17 @@ class AutonomyEnabler(Node):
         self.timer = self.create_timer(1.0 / self.rate, self.publish_joy)
 
         self.get_logger().info(
-            f"Autonomy enabler: will activate in {self.startup_delay:.1f}s"
+            f"Autonomy enabler: will activate after {self.startup_delay:.1f}s + first /way_point"
         )
+
+    # ------------------------------------------------------------------
+    def waypoint_cb(self, msg: PointStamped):
+        """Record that at least one frontier goal has been published."""
+        if not self.goal_received:
+            self.goal_received = True
+            self.get_logger().info(
+                f"First /way_point received: ({msg.point.x:.2f}, {msg.point.y:.2f})"
+            )
 
     # ------------------------------------------------------------------
     def publish_joy(self):
@@ -47,6 +65,10 @@ class AutonomyEnabler(Node):
 
         # wait for robot stand-up to finish
         if elapsed < self.startup_delay:
+            return
+
+        # wait for at least one frontier goal before enabling autonomy
+        if not self.goal_received:
             return
 
         if not self.enabled:
