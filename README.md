@@ -15,17 +15,26 @@ Use the Gazebo stack for simulation iteration and debugging. <!-- intent -->
    - If it already exists: `micromamba env update -n cmu_env -f cmu_env.yml --prune` <!-- cmd -->
 2) Build the workspace (from repo root): <!-- step -->
    - `source /opt/ros/humble/setup.bash` <!-- cmd -->
-   - `colcon build --symlink-install` <!-- cmd -->
+   - `colcon build --symlink-install --cmake-clean-cache --cmake-args -DPython3_EXECUTABLE=$CONDA_PREFIX/bin/python3` <!-- cmd -->
 3) Load runtime environment in each shell: <!-- step -->
    - `source setup_cmu_env.bash` <!-- cmd -->
 4) Launch simulation: <!-- step -->
    - `./start_exploration.sh` <!-- cmd -->
+ <!-- spacer -->
+## Reproducibility <!-- section -->
+1) Follow `REPRO.md` for clean-machine recreation steps. <!-- step -->
+2) Run `./tools/smoke_check.sh` while simulation is running. <!-- step -->
+3) Record version pins before sharing results: <!-- step -->
+   - `git rev-parse HEAD` <!-- cmd -->
+   - `git submodule status` <!-- cmd -->
  <!-- spacer -->
 ## Project Layout <!-- section -->
 - `src/go2_gazebo_sim/` — Gazebo simulation stack (launch, scripts, worlds). <!-- map -->
 - `src/autonomy_stack_go2/` — CMU autonomy stack (submodule). <!-- map -->
 - `src/unitree-go2-ros2/` — Unitree Go2 ROS 2 stack (submodule). <!-- map -->
 - `cmu_env.yml` — pinned `micromamba` environment for this workspace. <!-- map -->
+- `REPRO.md` — deterministic setup/build/run verification procedure. <!-- map -->
+- `tools/smoke_check.sh` — runtime signal validator for fallback demo. <!-- map -->
 - `WALKTHROUGH.md` — detailed Gazebo stack walkthrough. <!-- map -->
  <!-- spacer -->
 ## Notes <!-- section -->
