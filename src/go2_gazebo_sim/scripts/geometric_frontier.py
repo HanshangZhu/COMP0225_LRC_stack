@@ -69,6 +69,10 @@ class GeometricFrontier(Node):
         self.declare_parameter("goal_hold_sec", 0.0)
         self.declare_parameter("goal_reselect_distance", 0.8)
         self.declare_parameter("max_goal_distance", 4.0)
+        self.declare_parameter("min_goal_distance", 1.0)
+        self.declare_parameter("min_forward_cos", -0.35)
+        self.declare_parameter("forward_score_gain", 0.8)
+        self.declare_parameter("backward_penalty", 0.35)
         self.declare_parameter("obstacle_clearance_cells", 1)
         self.declare_parameter("startup_delay", 10.0)        # seconds before publishing goals
         self.declare_parameter("frontier_goal_topic", "/way_point")
@@ -92,6 +96,10 @@ class GeometricFrontier(Node):
         self.goal_hold_sec = float(self.get_parameter("goal_hold_sec").value)
         self.goal_reselect_distance = float(self.get_parameter("goal_reselect_distance").value)
         self.max_goal_distance = float(self.get_parameter("max_goal_distance").value)
+        self.min_goal_distance = float(self.get_parameter("min_goal_distance").value)
+        self.min_forward_cos = float(self.get_parameter("min_forward_cos").value)
+        self.forward_score_gain = float(self.get_parameter("forward_score_gain").value)
+        self.backward_penalty = float(self.get_parameter("backward_penalty").value)
         self.obstacle_clearance_cells = int(self.get_parameter("obstacle_clearance_cells").value)
         self.startup_delay = float(self.get_parameter("startup_delay").value)
         self.frontier_goal_topic = self.get_parameter("frontier_goal_topic").value
@@ -338,6 +346,7 @@ class GeometricFrontier(Node):
             return
         robot_x = odom.pose.pose.position.x
         robot_y = odom.pose.pose.position.y
+        robot_yaw = self.quat_to_yaw(odom.pose.pose.orientation)
 
         # Keep the current goal until we're close, to prevent zig-zag retargeting.
         if self.last_goal is not None and self.goal_reselect_distance > 0.0:
@@ -353,25 +362,17 @@ class GeometricFrontier(Node):
         best_size = -1
         best_score = -1.0
         for cluster in clusters:
-            sx = 0.0
-            sy = 0.0
-            for gx, gy in cluster:
-                x, y = self.grid_to_world(gx, gy)
-                sx += x
-                sy += y
-            cx = sx / len(cluster)
-            cy = sy / len(cluster)
-            dist = math.hypot(cx - robot_x, cy - robot_y)
-
-            # Refuse long-distance goal flips that create turn-back behavior.
-            if self.max_goal_distance > 0.0 and dist > self.max_goal_distance:
+            candidate = self.pick_cluster_goal(cluster, robot_x, robot_y, robot_yaw)
+            if candidate is None:
                 continue
+            cx, cy, dist, point_score = candidate
 
             size = len(cluster)
-            score = size / max(dist, 0.1)
+            score = size * point_score
             if self.selection_mode == "largest":
-                if size > best_size:
+                if size > best_size or (size == best_size and score > best_score):
                     best_size = size
+                    best_score = score
                     best_dist = dist
                     best = (cx, cy)
             elif self.selection_mode == "score":
@@ -411,6 +412,38 @@ class GeometricFrontier(Node):
         self.last_goal = (best[0], best[1])
         self.last_goal_time = now
 
+    def pick_cluster_goal(self, cluster: List[Tuple[int, int]], robot_x: float, robot_y: float, robot_yaw: float):
+        """Pick a concrete frontier point from a cluster (not centroid) to avoid near-self goals."""
+        best_point = None
+        best_dist = 0.0
+        best_score = -1.0
+        backward_penalty = max(0.0, min(1.0, self.backward_penalty))
+        for gx, gy in cluster:
+            x, y = self.grid_to_world(gx, gy)
+            dist = math.hypot(x - robot_x, y - robot_y)
+            if self.min_goal_distance > 0.0 and dist < self.min_goal_distance:
+                continue
+            if self.max_goal_distance > 0.0 and dist > self.max_goal_distance:
+                continue
+
+            goal_heading = math.atan2(y - robot_y, x - robot_x)
+            heading_err = self.wrap_angle(goal_heading - robot_yaw)
+            forward = math.cos(heading_err)
+
+            # Prefer farther forward points; still allow backward fallback if needed.
+            point_score = dist * (1.0 + self.forward_score_gain * max(0.0, forward))
+            if forward < self.min_forward_cos:
+                point_score *= backward_penalty
+
+            if point_score > best_score:
+                best_score = point_score
+                best_dist = dist
+                best_point = (x, y)
+
+        if best_point is None:
+            return None
+        return best_point[0], best_point[1], best_dist, best_score
+
     def publish_goal_marker(self, x: float, y: float, stamp):
         marker = Marker()
         marker.header.stamp = stamp
@@ -437,6 +470,14 @@ class GeometricFrontier(Node):
         siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
         cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
         return math.atan2(siny_cosp, cosy_cosp)
+
+    @staticmethod
+    def wrap_angle(a: float) -> float:
+        while a > math.pi:
+            a -= 2.0 * math.pi
+        while a < -math.pi:
+            a += 2.0 * math.pi
+        return a
 
     @staticmethod
     def point(x: float, y: float):

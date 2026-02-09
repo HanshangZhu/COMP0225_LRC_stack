@@ -212,6 +212,10 @@ def generate_launch_description():
             'goal_hold_sec': 3.0,
             'goal_reselect_distance': 0.7,
             'max_goal_distance': 4.0,
+            'min_goal_distance': 0.6,
+            'min_forward_cos': -0.35,
+            'forward_score_gain': 0.8,
+            'backward_penalty': 0.35,
             'obstacle_clearance_cells': 2,
             'startup_delay': 12.0,          # let robot stand up + autonomy enable first
             'frontier_goal_topic': '/way_point',
