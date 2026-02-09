@@ -23,16 +23,16 @@ def _build_runtime_nodes(context):
     use_sim_time = LaunchConfiguration("use_sim_time").perform(context).lower() == "true"
     rviz_enabled = LaunchConfiguration("rviz").perform(context).lower() == "true"
 
+    go2_gazebo_pkg = get_package_share_directory("go2_gazebo_sim")
     go2_description_pkg = get_package_share_directory("go2_description")
     go2_config_pkg = get_package_share_directory("go2_config")
     champ_base_pkg = get_package_share_directory("champ_base")
-    champ_description_pkg = get_package_share_directory("champ_description")
 
     description_path = os.path.join(go2_description_pkg, "xacro", "robot.xacro")
     joints_config = os.path.join(go2_config_pkg, "config", "joints", "joints.yaml")
     links_config = os.path.join(go2_config_pkg, "config", "links", "links.yaml")
     gait_config = os.path.join(go2_config_pkg, "config", "gait", "gait.yaml")
-    rviz_path = os.path.join(champ_description_pkg, "rviz", "urdf_viewer.rviz")
+    rviz_path = os.path.join(go2_gazebo_pkg, "rviz", "autonomy.rviz")
 
     # Keep robot_description compact; gazebo_ros2_control can choke on XML comments.
     doc = xacro.process_file(description_path)
