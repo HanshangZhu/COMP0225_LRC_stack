@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Int8
 import numpy as np
@@ -24,7 +25,7 @@ class WallCollisionChecker(Node):
             LaserScan,
             self.scan_topic,
             self.scan_callback,
-            10
+            qos_profile_sensor_data
         )
         self.pub = self.create_publisher(Int8, self.stop_topic, 10)
         

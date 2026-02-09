@@ -28,7 +28,9 @@ def _build_runtime_nodes(context):
     go2_config_pkg = get_package_share_directory("go2_config")
     champ_base_pkg = get_package_share_directory("champ_base")
 
-    description_path = os.path.join(go2_description_pkg, "xacro", "robot.xacro")
+    # Use the local lidar-enabled model to guarantee a live scan source.
+    # Upstream go2_description/robot.xacro may not always include front_laser.
+    description_path = os.path.join(go2_gazebo_pkg, "urdf", "go2_description_3d_lidar.xacro")
     joints_config = os.path.join(go2_config_pkg, "config", "joints", "joints.yaml")
     links_config = os.path.join(go2_config_pkg, "config", "links", "links.yaml")
     gait_config = os.path.join(go2_config_pkg, "config", "gait", "gait.yaml")

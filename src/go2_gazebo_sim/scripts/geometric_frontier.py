@@ -9,6 +9,7 @@ from typing import List, Tuple
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
 from geometry_msgs.msg import Point, PointStamped
 from nav_msgs.msg import OccupancyGrid, Odometry
@@ -118,7 +119,9 @@ class GeometricFrontier(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
         # Subscribers
-        self.scan_sub = self.create_subscription(LaserScan, self.scan_topic, self.scan_cb, 10)
+        self.scan_sub = self.create_subscription(
+            LaserScan, self.scan_topic, self.scan_cb, qos_profile_sensor_data
+        )
         self.odom_sub = self.create_subscription(Odometry, self.odom_topic, self.odom_cb, 10)
 
         # Publishers

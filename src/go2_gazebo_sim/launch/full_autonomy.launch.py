@@ -35,21 +35,28 @@ def generate_launch_description():
     
     # === 2. Bridges (after robot is up) ===
     
-    # Convert 2D LaserScan -> 3D PointCloud2
-    laserscan_to_pointcloud = Node(
+    # Convert 3D PointCloud2 -> 2D LaserScan for reactive stack (/scan consumers)
+    pointcloud_to_laserscan = Node(
         package='pointcloud_to_laserscan',
-        executable='laserscan_to_pointcloud_node',
-        name='laserscan_to_pointcloud',
+        executable='pointcloud_to_laserscan_node',
+        name='pointcloud_to_laserscan',
         parameters=[{
             'use_sim_time': True,
             'target_frame': 'odom',
             'transform_tolerance': 1.0,
             'min_height': 0.15,
             'max_height': 1.0,
+            'angle_min': -3.14159,
+            'angle_max': 3.14159,
+            'angle_increment': 0.006135923151543,
+            'scan_time': 0.1,
+            'range_min': 0.2,
+            'range_max': 20.0,
+            'use_inf': True,
         }],
         remappings=[
-            ('scan_in', '/scan'),
-            ('cloud', '/registered_scan'),
+            ('cloud_in', '/registered_scan'),
+            ('scan', '/scan'),
         ],
         output='screen',
     )
@@ -95,7 +102,7 @@ def generate_launch_description():
     # Delayed bridges (wait for robot to spawn)
     delayed_bridges = TimerAction(
         period=10.0,
-        actions=[laserscan_to_pointcloud, qos_bridge_node, twist_bridge_node]
+        actions=[pointcloud_to_laserscan, qos_bridge_node, twist_bridge_node]
     )
     
     # Delayed autonomy (wait for bridges)

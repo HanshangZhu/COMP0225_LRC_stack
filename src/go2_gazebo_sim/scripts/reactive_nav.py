@@ -17,6 +17,7 @@ from typing import Optional
 
 import rclpy                                      # ROS 2 client library
 from rclpy.node import Node                       # base node class
+from rclpy.qos import qos_profile_sensor_data
 from geometry_msgs.msg import PointStamped, TwistStamped  # message types
 from nav_msgs.msg import Odometry                 # odometry message
 from sensor_msgs.msg import LaserScan             # laser scan message
@@ -78,7 +79,7 @@ class ReactiveNav(Node):
         # --- subscribers ---------------------------------------------------
         self.create_subscription(PointStamped, "/way_point", self.goal_cb, 10)
         self.create_subscription(Odometry, "/odom/ground_truth", self.odom_cb, 10)
-        self.create_subscription(LaserScan, "/scan", self.scan_cb, 10)
+        self.create_subscription(LaserScan, "/scan", self.scan_cb, qos_profile_sensor_data)
 
         # --- publisher -----------------------------------------------------
         self.cmd_pub = self.create_publisher(TwistStamped, "/cmd_vel_stamped", 10)
