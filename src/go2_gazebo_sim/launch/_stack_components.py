@@ -210,7 +210,7 @@ def build_pointcloud_to_laserscan_node(ns: str | None, use_sim_time, extra_param
         'use_sim_time': use_sim_time,
         'target_frame': 'base_link',  # Changed to base_link for local frame, or keep odom? Launch had odom.
         'transform_tolerance': 1.0,
-        'min_height': 0.15,
+        'min_height': 0.3,
         'max_height': 1.0,
         'angle_min': -3.14159,
         'angle_max': 3.14159,
@@ -462,7 +462,7 @@ def build_dual_robot_stack(
             "-y",
             spawn_y,
             "-z",
-            "0.32",
+            "0.45",
             "-R",
             "0",
             "-P",

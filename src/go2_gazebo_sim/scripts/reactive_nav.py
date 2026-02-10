@@ -37,6 +37,15 @@ class ReactiveNav(Node):
         self.replan_pub = self.create_publisher(Empty, self.cfg.frontier_replan_topic, 10)
         self.status_pub = self.create_publisher(String, "/nav_status", 10)
 
+        # --- CSV Logging Setup ---
+        import time
+        import os
+        ns_sanitized = self.get_namespace().strip("/").replace("/", "_")
+        self.csv_path = f"/tmp/reactive_nav_log_{ns_sanitized}_{int(time.time())}.csv"
+        self.get_logger().info(f"Logging navigation data to: {self.csv_path}")
+        with open(self.csv_path, "w") as f:
+            f.write("timestamp,mode,x,y,yaw,goal_x,goal_y,dist_to_goal,min_obst_dist,cmd_vx,cmd_wz,replan\n")
+
         self.timer = self.create_timer(1.0 / self.cfg.control_rate, self.control_loop)
         self.get_logger().info("Reactive nav started")
 
@@ -103,6 +112,24 @@ class ReactiveNav(Node):
         status_msg = String()
         status_msg.data = json.dumps(diag, separators=(",", ":"))
         self.status_pub.publish(status_msg)
+
+        # Append to CSV Log
+        # Columns: timestamp,mode,x,y,yaw,goal_x,goal_y,dist_to_goal,min_obst_dist,cmd_vx,cmd_wz,replan
+        try:
+            dist_to_goal = math.hypot(self.goal_state.x - self.robot_state.x, self.goal_state.y - self.robot_state.y)
+            mode = diag.get("mode", "unknown")
+            min_obst = diag.get("mf", -1.0)  # min front distance
+            replan = 1 if result.request_replan else 0
+            
+            log_line = (
+                f"{now_sec:.3f},{mode},{self.robot_state.x:.3f},{self.robot_state.y:.3f},{self.robot_state.yaw:.3f},"
+                f"{self.goal_state.x:.3f},{self.goal_state.y:.3f},{dist_to_goal:.3f},{min_obst:.3f},"
+                f"{result.linear_x:.3f},{result.angular_z:.3f},{replan}\n"
+            )
+            with open(self.csv_path, "a") as f:
+                f.write(log_line)
+        except Exception as e:
+            pass # Don't crash on logging
 
     @staticmethod
     def _yaw_from_quat(x: float, y: float, z: float, w: float) -> float:

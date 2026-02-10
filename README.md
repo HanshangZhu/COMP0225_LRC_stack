@@ -30,6 +30,7 @@ Use the Gazebo stack for simulation iteration and debugging. <!-- intent -->
  <!-- spacer -->
 ## Project Layout <!-- section -->
 - `src/go2_gazebo_sim/` — Gazebo simulation stack (launch, scripts, worlds). <!-- map -->
+- `src/go2_gazebo_sim/launch/full_autonomy.launch.py` — Main entry point for single-robot autonomy. <!-- map -->
 - `src/autonomy_stack_go2/` — CMU autonomy stack (submodule). <!-- map -->
 - `src/unitree-go2-ros2/` — Unitree Go2 ROS 2 stack (submodule). <!-- map -->
 - `cmu_env.yml` — pinned `micromamba` environment for this workspace. <!-- map -->
@@ -38,6 +39,6 @@ Use the Gazebo stack for simulation iteration and debugging. <!-- intent -->
 - `WALKTHROUGH.md` — detailed Gazebo stack walkthrough. <!-- map -->
  <!-- spacer -->
 ## Notes <!-- section -->
-- This repo uses 2D lidar for exploration in Gazebo. <!-- note -->
+- This repo uses 2D lidar for exploration in a single-robot Gazebo environment. <!-- note -->
 - CMU planner integration requires 3D sensing; not enabled by default here. <!-- note -->
 - Build artifacts are ignored via `.gitignore`. <!-- note -->

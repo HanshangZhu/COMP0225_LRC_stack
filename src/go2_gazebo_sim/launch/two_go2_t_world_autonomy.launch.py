@@ -267,7 +267,7 @@ def generate_launch_description():
             rviz_node_robot_b,
             dual_coverage_visualizer_node,
             TimerAction(period=2.0, actions=robot_a_actions),
-            TimerAction(period=4.0, actions=robot_b_actions),
-            TimerAction(period=20.0, actions=[robot_status_monitor_node]),
+            TimerAction(period=10.0, actions=robot_b_actions),
+            TimerAction(period=25.0, actions=[robot_status_monitor_node]),
         ]
     )

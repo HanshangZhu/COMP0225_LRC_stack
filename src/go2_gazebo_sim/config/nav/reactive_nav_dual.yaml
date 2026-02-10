@@ -2,9 +2,9 @@
   ros__parameters:
     max_linear_speed: 0.35
     max_angular_speed: 0.8
-    goal_tolerance: 0.55
-    obstacle_slow_dist: 0.6
-    obstacle_stop_dist: 0.26
+    goal_tolerance: 0.65
+    obstacle_slow_dist: 0.45
+    obstacle_stop_dist: 0.22
     front_half_angle_deg: 30.0
     side_check_angle_deg: 42.0
     avoidance_gain: 0.55
@@ -18,7 +18,7 @@
     avoidance_conflict_scale: 0.20
     turn_in_place_on_block: true
     wall_scan_enabled: true
-    wall_scan_trigger_dist: 0.26
+    wall_scan_trigger_dist: 0.18
     wall_scan_turn_speed: 0.7
     wall_scan_total_angle_deg: 360.0
     wall_scan_rearm_dist: 0.6

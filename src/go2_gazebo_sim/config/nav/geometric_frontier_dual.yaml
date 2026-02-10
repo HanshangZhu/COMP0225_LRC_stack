@@ -7,7 +7,7 @@
     origin_x: -20.0
     origin_y: -20.0
     max_range: 6.0
-    update_rate: 0.5
+    update_rate: 2.0
     frontier_min_size: 10
     selection_mode: score
     goal_hysteresis_distance: 0.20
@@ -18,7 +18,7 @@
     min_forward_cos: -0.35
     forward_score_gain: 0.8
     backward_penalty: 0.35
-    obstacle_clearance_cells: 4
+    obstacle_clearance_cells: 6
     goal_standoff_distance: 0.8
     goal_standoff_search_radius: 1.4
     startup_delay: 12.0
