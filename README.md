@@ -1,5 +1,5 @@
-# CMU-Exploration (Flagged) <!-- title -->
-This repo is a flagged variant of CMU-Exploration with a Gazebo stack under active development. <!-- summary -->
+# CMU-Exploration (Forked) <!-- title -->
+This repo is a forked variant of CMU-Exploration with a Gazebo stack under active development. <!-- summary -->
 The original CMU codebases are preserved as submodules. <!-- constraint -->
 Use the Gazebo stack for simulation iteration and debugging. <!-- intent -->
  <!-- spacer -->
