@@ -44,6 +44,12 @@ install(PROGRAMS
   scripts/stand_up_slowly.py
   scripts/autonomy_enabler.py
   scripts/reactive_nav.py
+  scripts/dual_map_coverage_visualizer.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(DIRECTORY
+  scripts/reactive_nav_core
   DESTINATION lib/${PROJECT_NAME}
 )
 

@@ -41,13 +41,39 @@ colcon build \
   --cmake-args -DPython3_EXECUTABLE=$CONDA_PREFIX/bin/python3
 ```
 
-## 4. Run demo
+## 4. Workspace cleanup (safe-by-default)
+
+Inspect workspace status and artifact footprint:
+
+```bash
+./tools/status_report.sh
+```
+
+Safe cleanup (recommended):
+
+```bash
+./tools/clean_workspace.sh safe
+```
+
+Build cleanup:
+
+```bash
+./tools/clean_workspace.sh build
+```
+
+Full cleanup (destructive):
+
+```bash
+./tools/clean_workspace.sh full --yes
+```
+
+## 5. Run demo
 
 ```bash
 ./start_exploration.sh
 ```
 
-## 5. Smoke test (headless checks)
+## 6. Smoke test (headless checks)
 
 In a second terminal:
 
@@ -61,7 +87,7 @@ Expected pass conditions:
 - `/way_point` receives at least one message
 - `/cmd_vel_stamped` receives at least one message
 
-## 6. Pinning and traceability
+## 7. Pinning and traceability
 
 Capture exact versions before sharing:
 

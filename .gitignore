@@ -10,11 +10,16 @@
 # Python cache
 **/__pycache__/
 *.pyc
+*.pyo
+*.pyd
+.pytest_cache/
 
 # Local debug artifacts
 *.log
 *.gv
 *.pdf
+*.tmp
+*~
 
 # ROS logs
 /.ros/

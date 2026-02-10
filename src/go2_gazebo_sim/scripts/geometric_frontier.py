@@ -14,7 +14,7 @@ from rclpy.time import Time
 from geometry_msgs.msg import Point, PointStamped
 from nav_msgs.msg import OccupancyGrid, Odometry
 from sensor_msgs.msg import LaserScan
-from std_msgs.msg import Header
+from std_msgs.msg import Empty, Header
 from visualization_msgs.msg import Marker, MarkerArray
 from tf2_ros import Buffer, TransformListener, LookupException, ExtrapolationException
 
@@ -68,6 +68,7 @@ class GeometricFrontier(Node):
         self.declare_parameter("selection_mode", "nearest")
         self.declare_parameter("goal_hysteresis_distance", 0.0)
         self.declare_parameter("goal_hold_sec", 0.0)
+        self.declare_parameter("goal_refresh_sec", 1.0)
         self.declare_parameter("goal_reselect_distance", 0.8)
         self.declare_parameter("max_goal_distance", 4.0)
         self.declare_parameter("min_goal_distance", 1.0)
@@ -75,10 +76,15 @@ class GeometricFrontier(Node):
         self.declare_parameter("forward_score_gain", 0.8)
         self.declare_parameter("backward_penalty", 0.35)
         self.declare_parameter("obstacle_clearance_cells", 1)
+        self.declare_parameter("goal_standoff_distance", 0.45)
+        self.declare_parameter("goal_standoff_search_radius", 0.8)
         self.declare_parameter("startup_delay", 10.0)        # seconds before publishing goals
         self.declare_parameter("frontier_goal_topic", "/way_point")
         self.declare_parameter("frontier_marker_topic", "/frontier_goal_marker")
         self.declare_parameter("frontier_regions_topic", "/frontier_markers")
+        self.declare_parameter("frontier_replan_topic", "/frontier_replan")
+        self.declare_parameter("force_replan_min_score_gain", 0.05)
+        self.declare_parameter("force_replan_min_goal_separation", 0.8)
 
         self.scan_topic = self.get_parameter("scan_topic").value
         self.odom_topic = self.get_parameter("odom_topic").value
@@ -95,6 +101,7 @@ class GeometricFrontier(Node):
         self.selection_mode = self.get_parameter("selection_mode").value
         self.goal_hysteresis_distance = float(self.get_parameter("goal_hysteresis_distance").value)
         self.goal_hold_sec = float(self.get_parameter("goal_hold_sec").value)
+        self.goal_refresh_sec = max(0.0, float(self.get_parameter("goal_refresh_sec").value))
         self.goal_reselect_distance = float(self.get_parameter("goal_reselect_distance").value)
         self.max_goal_distance = float(self.get_parameter("max_goal_distance").value)
         self.min_goal_distance = float(self.get_parameter("min_goal_distance").value)
@@ -102,10 +109,23 @@ class GeometricFrontier(Node):
         self.forward_score_gain = float(self.get_parameter("forward_score_gain").value)
         self.backward_penalty = float(self.get_parameter("backward_penalty").value)
         self.obstacle_clearance_cells = int(self.get_parameter("obstacle_clearance_cells").value)
+        self.goal_standoff_distance = max(
+            0.0, float(self.get_parameter("goal_standoff_distance").value)
+        )
+        self.goal_standoff_search_radius = max(
+            0.0, float(self.get_parameter("goal_standoff_search_radius").value)
+        )
         self.startup_delay = float(self.get_parameter("startup_delay").value)
         self.frontier_goal_topic = self.get_parameter("frontier_goal_topic").value
         self.frontier_marker_topic = self.get_parameter("frontier_marker_topic").value
         self.frontier_regions_topic = self.get_parameter("frontier_regions_topic").value
+        self.frontier_replan_topic = self.get_parameter("frontier_replan_topic").value
+        self.force_replan_min_score_gain = float(
+            self.get_parameter("force_replan_min_score_gain").value
+        )
+        self.force_replan_min_goal_separation = float(
+            self.get_parameter("force_replan_min_goal_separation").value
+        )
 
         # State
         self.last_scan: LaserScan | None = None
@@ -113,6 +133,9 @@ class GeometricFrontier(Node):
         self.laser_to_base = None
         self.last_goal: Tuple[float, float] | None = None
         self.last_goal_time: Time | None = None
+        self.last_goal_publish_time: Time | None = None
+        self.last_goal_score: float | None = None
+        self.force_replan_requested = False
         self.grid = [-1] * (self.width * self.height)
         self.start_time = None                              # set on first update
         self.tf_buffer = Buffer()
@@ -123,6 +146,9 @@ class GeometricFrontier(Node):
             LaserScan, self.scan_topic, self.scan_cb, qos_profile_sensor_data
         )
         self.odom_sub = self.create_subscription(Odometry, self.odom_topic, self.odom_cb, 10)
+        self.replan_sub = self.create_subscription(
+            Empty, self.frontier_replan_topic, self.replan_cb, 10
+        )
 
         # Publishers
         self.map_pub = self.create_publisher(OccupancyGrid, self.map_topic, 1)
@@ -140,6 +166,9 @@ class GeometricFrontier(Node):
 
     def odom_cb(self, msg: Odometry):
         self.last_odom = msg
+
+    def replan_cb(self, _msg: Empty):
+        self.force_replan_requested = True
 
     def world_to_grid(self, x: float, y: float) -> Tuple[int, int] | None:
         gx = int((x - self.origin_x) / self.resolution)
@@ -177,9 +206,6 @@ class GeometricFrontier(Node):
 
         scan = self.last_scan
         odom = self.last_odom
-
-        if self.map_frame != "odom":
-            self.get_logger().warn("map_frame is not 'odom'; expect map to be in odom frame.")
 
         if self.laser_to_base is None:
             try:
@@ -350,79 +376,159 @@ class GeometricFrontier(Node):
         robot_x = odom.pose.pose.position.x
         robot_y = odom.pose.pose.position.y
         robot_yaw = self.quat_to_yaw(odom.pose.pose.orientation)
+        robot_cell = self.world_to_grid(robot_x, robot_y)
+        force_replan = self.force_replan_requested
 
         # Keep the current goal until we're close, to prevent zig-zag retargeting.
-        if self.last_goal is not None and self.goal_reselect_distance > 0.0:
+        # Force replan requests from reactive_nav must bypass this gate.
+        if self.last_goal is not None and self.goal_reselect_distance > 0.0 and not force_replan:
             dist_to_last_goal = math.hypot(
                 self.last_goal[0] - robot_x,
                 self.last_goal[1] - robot_y,
             )
             if dist_to_last_goal > self.goal_reselect_distance:
+                self._republish_last_goal_if_due(stamp)
                 return
 
-        best = None
-        best_dist = 1e9
-        best_size = -1
-        best_score = -1.0
+        candidates: List[Tuple[float, float, float, float, int]] = []
         for cluster in clusters:
-            candidate = self.pick_cluster_goal(cluster, robot_x, robot_y, robot_yaw)
+            candidate = self.pick_cluster_goal(cluster, robot_x, robot_y, robot_yaw, robot_cell)
             if candidate is None:
                 continue
             cx, cy, dist, point_score = candidate
-
             size = len(cluster)
             score = size * point_score
-            if self.selection_mode == "largest":
-                if size > best_size or (size == best_size and score > best_score):
-                    best_size = size
-                    best_score = score
-                    best_dist = dist
-                    best = (cx, cy)
-            elif self.selection_mode == "score":
-                if score > best_score:
-                    best_score = score
-                    best_dist = dist
-                    best = (cx, cy)
-            else:
-                if dist < best_dist:
-                    best_dist = dist
-                    best = (cx, cy)
+            candidates.append((cx, cy, dist, score, size))
 
-        if best is None:
+        if not candidates:
             return
 
+        selected = self._select_best_candidate(candidates)
+        if selected is None:
+            return
+
+        best = (selected[0], selected[1])
+        best_dist = selected[2]
+        best_score = selected[3]
+
         now = Time.from_msg(stamp)
-        if self.last_goal is not None and self.last_goal_time is not None:
+        if force_replan and self.last_goal is not None:
+            min_sep = max(0.0, self.force_replan_min_goal_separation)
+            reselection_pool = [
+                c
+                for c in candidates
+                if math.hypot(c[0] - self.last_goal[0], c[1] - self.last_goal[1]) >= min_sep
+            ]
+            reselection = self._select_best_candidate(reselection_pool)
+            if reselection is not None:
+                best = (reselection[0], reselection[1])
+                best_dist = reselection[2]
+                best_score = reselection[3]
+            else:
+                # If no candidate satisfies strict separation, still force a meaningful shift.
+                alt_pool = [
+                    c
+                    for c in candidates
+                    if math.hypot(c[0] - self.last_goal[0], c[1] - self.last_goal[1]) > 0.25
+                ]
+                if alt_pool:
+                    alt = max(
+                        alt_pool,
+                        key=lambda c: (
+                            math.hypot(c[0] - self.last_goal[0], c[1] - self.last_goal[1]),
+                            c[2],
+                            c[3],
+                        ),
+                    )
+                    best = (alt[0], alt[1])
+                    best_dist = alt[2]
+                    best_score = alt[3]
+
+        if (
+            force_replan
+            and self.last_goal_score is not None
+            and best_score < (self.last_goal_score + self.force_replan_min_score_gain)
+            and self.last_goal is not None
+        ):
+            # Reject near-identical low-gain goals during force replan to avoid oscillation.
+            alt_pool = [
+                c
+                for c in candidates
+                if math.hypot(c[0] - self.last_goal[0], c[1] - self.last_goal[1]) > 0.35
+            ]
+            if alt_pool:
+                alt = max(alt_pool, key=lambda c: (c[2], c[3], c[4]))
+                best = (alt[0], alt[1])
+                best_dist = alt[2]
+                best_score = alt[3]
+
+        if self.last_goal is not None and self.last_goal_time is not None and not force_replan:
             if self.goal_hold_sec > 0.0:
                 if (now - self.last_goal_time).nanoseconds / 1e9 < self.goal_hold_sec:
+                    self._republish_last_goal_if_due(stamp)
                     return
             if self.goal_hysteresis_distance > 0.0:
                 if math.hypot(best[0] - self.last_goal[0], best[1] - self.last_goal[1]) < self.goal_hysteresis_distance:
+                    self._republish_last_goal_if_due(stamp)
                     return
 
         self.get_logger().info(
             f"GOAL -> ({best[0]:.2f}, {best[1]:.2f})  "
             f"dist={best_dist:.2f} mode={self.selection_mode}"
         )
-        self.publish_goal_marker(best[0], best[1], stamp)
+        self._publish_goal_point(best[0], best[1], stamp)
+        self.last_goal = (best[0], best[1])
+        self.last_goal_time = now
+        self.last_goal_publish_time = now
+        self.last_goal_score = best_score
+        self.force_replan_requested = False
+
+    def _publish_goal_point(self, x: float, y: float, stamp):
+        self.publish_goal_marker(x, y, stamp)
         msg = PointStamped()
         msg.header.stamp = stamp
         msg.header.frame_id = self.map_frame
-        msg.point.x = best[0]
-        msg.point.y = best[1]
+        msg.point.x = x
+        msg.point.y = y
         msg.point.z = 0.0
         self.goal_pub.publish(msg)
-        self.last_goal = (best[0], best[1])
-        self.last_goal_time = now
 
-    def pick_cluster_goal(self, cluster: List[Tuple[int, int]], robot_x: float, robot_y: float, robot_yaw: float):
+    def _republish_last_goal_if_due(self, stamp):
+        if self.last_goal is None or self.goal_refresh_sec <= 0.0:
+            return
+        now = Time.from_msg(stamp)
+        if self.last_goal_publish_time is not None:
+            since_last_pub = (now - self.last_goal_publish_time).nanoseconds / 1e9
+            if since_last_pub < self.goal_refresh_sec:
+                return
+        self._publish_goal_point(self.last_goal[0], self.last_goal[1], stamp)
+        self.last_goal_publish_time = now
+
+    def pick_cluster_goal(
+        self,
+        cluster: List[Tuple[int, int]],
+        robot_x: float,
+        robot_y: float,
+        robot_yaw: float,
+        robot_cell: Tuple[int, int] | None,
+    ):
         """Pick a concrete frontier point from a cluster (not centroid) to avoid near-self goals."""
         best_point = None
         best_dist = 0.0
         best_score = -1.0
         backward_penalty = max(0.0, min(1.0, self.backward_penalty))
         for gx, gy in cluster:
-            x, y = self.grid_to_world(gx, gy)
+            candidate = self._standoff_goal_from_frontier(gx, gy, robot_x, robot_y)
+            if candidate is None:
+                continue
+            x, y = candidate
+            goal_cell = self.world_to_grid(x, y)
+            if goal_cell is None:
+                continue
+            if robot_cell is not None and self._line_blocked(
+                robot_cell[0], robot_cell[1], goal_cell[0], goal_cell[1]
+            ):
+                continue
             dist = math.hypot(x - robot_x, y - robot_y)
             if self.min_goal_distance > 0.0 and dist < self.min_goal_distance:
                 continue
@@ -446,6 +552,120 @@ class GeometricFrontier(Node):
         if best_point is None:
             return None
         return best_point[0], best_point[1], best_dist, best_score
+
+    def score_goal_point(self, x: float, y: float, robot_x: float, robot_y: float, robot_yaw: float):
+        dist = math.hypot(x - robot_x, y - robot_y)
+        if self.min_goal_distance > 0.0 and dist < self.min_goal_distance:
+            return None
+        if self.max_goal_distance > 0.0 and dist > self.max_goal_distance:
+            return None
+        goal_heading = math.atan2(y - robot_y, x - robot_x)
+        heading_err = self.wrap_angle(goal_heading - robot_yaw)
+        forward = math.cos(heading_err)
+        score = dist * (1.0 + self.forward_score_gain * max(0.0, forward))
+        if forward < self.min_forward_cos:
+            score *= max(0.0, min(1.0, self.backward_penalty))
+        return score
+
+    def _select_best_candidate(
+        self, candidates: List[Tuple[float, float, float, float, int]]
+    ) -> Tuple[float, float, float, float, int] | None:
+        if not candidates:
+            return None
+        if self.selection_mode == "largest":
+            return max(candidates, key=lambda c: (c[4], c[3], -c[2]))
+        if self.selection_mode == "score":
+            return max(candidates, key=lambda c: (c[3], c[4], -c[2]))
+        return min(candidates, key=lambda c: (c[2], -c[3], -c[4]))
+
+    def _line_blocked(self, x0: int, y0: int, x1: int, y1: int) -> bool:
+        cells = bresenham(x0, y0, x1, y1)
+        for cx, cy in cells[1:-1]:
+            idx = cy * self.width + cx
+            if self.grid[idx] == 100:
+                return True
+        return False
+
+    def _cell_is_traversable(self, gx: int, gy: int) -> bool:
+        if gx < 0 or gy < 0 or gx >= self.width or gy >= self.height:
+            return False
+        idx = gy * self.width + gx
+        if self.grid[idx] != 0:
+            return False
+        if self.is_near_obstacle(gx, gy):
+            return False
+        return True
+
+    def _nearest_traversable_cell(self, gx: int, gy: int, radius_cells: int) -> Tuple[int, int] | None:
+        if self._cell_is_traversable(gx, gy):
+            return gx, gy
+
+        best_cell = None
+        best_d2 = float("inf")
+        for r in range(1, max(1, radius_cells) + 1):
+            for dx in range(-r, r + 1):
+                for dy in (-r, r):
+                    nx = gx + dx
+                    ny = gy + dy
+                    if not self._cell_is_traversable(nx, ny):
+                        continue
+                    d2 = dx * dx + dy * dy
+                    if d2 < best_d2:
+                        best_d2 = d2
+                        best_cell = (nx, ny)
+            for dy in range(-r + 1, r):
+                for dx in (-r, r):
+                    nx = gx + dx
+                    ny = gy + dy
+                    if not self._cell_is_traversable(nx, ny):
+                        continue
+                    d2 = dx * dx + dy * dy
+                    if d2 < best_d2:
+                        best_d2 = d2
+                        best_cell = (nx, ny)
+            if best_cell is not None:
+                return best_cell
+        return None
+
+    def _standoff_goal_from_frontier(
+        self,
+        frontier_gx: int,
+        frontier_gy: int,
+        robot_x: float,
+        robot_y: float,
+    ) -> Tuple[float, float] | None:
+        fx, fy = self.grid_to_world(frontier_gx, frontier_gy)
+        if self.goal_standoff_distance <= 1e-6:
+            return fx, fy
+
+        vx = fx - robot_x
+        vy = fy - robot_y
+        dist = math.hypot(vx, vy)
+        if dist <= 1e-6:
+            return None
+
+        ux = vx / dist
+        uy = vy / dist
+        standoff = min(self.goal_standoff_distance, max(0.0, dist - 0.10))
+        step = max(0.05, self.resolution * 0.5)
+
+        offset = standoff
+        while offset >= 0.0:
+            cx = fx - ux * offset
+            cy = fy - uy * offset
+            cell = self.world_to_grid(cx, cy)
+            if cell is not None and self._cell_is_traversable(cell[0], cell[1]):
+                return self.grid_to_world(cell[0], cell[1])
+            offset -= step
+
+        base_cell = self.world_to_grid(fx - ux * standoff, fy - uy * standoff)
+        if base_cell is None:
+            base_cell = (frontier_gx, frontier_gy)
+        radius_cells = max(1, int(round(self.goal_standoff_search_radius / self.resolution)))
+        nearest = self._nearest_traversable_cell(base_cell[0], base_cell[1], radius_cells)
+        if nearest is None:
+            return None
+        return self.grid_to_world(nearest[0], nearest[1])
 
     def publish_goal_marker(self, x: float, y: float, stamp):
         marker = Marker()

@@ -15,11 +15,16 @@ class WallCollisionChecker(Node):
         self.declare_parameter('scan_topic', '/scan')
         self.declare_parameter('stop_topic', '/stop')
         self.declare_parameter('check_angle_deg', 60.0) # Check +/- 30 degrees front
+        self.declare_parameter('min_valid_range', 0.12)  # Filter body/self and near-noise
+        self.declare_parameter('min_close_points', 5)    # Require a wall patch, not a single ray
         
         self.safety_dist = self.get_parameter('safety_dist').value
         self.scan_topic = self.get_parameter('scan_topic').value
         self.stop_topic = self.get_parameter('stop_topic').value
         self.check_angle_rad = np.deg2rad(self.get_parameter('check_angle_deg').value) / 2.0
+        self.min_valid_range = float(self.get_parameter('min_valid_range').value)
+        self.min_close_points = int(self.get_parameter('min_close_points').value)
+        self.last_stop_state = 0
 
         self.sub = self.create_subscription(
             LaserScan,
@@ -55,20 +60,25 @@ class WallCollisionChecker(Node):
         
         # Filter out inf/nan
         front_ranges = front_ranges[np.isfinite(front_ranges)]
-        front_ranges = front_ranges[front_ranges > 0.05] # Ignore self body
-        
+        front_ranges = front_ranges[front_ranges > self.min_valid_range]
+
         stop_msg = Int8()
         
         if len(front_ranges) > 0:
             min_dist = np.min(front_ranges)
-            if min_dist < self.safety_dist:
+            close_count = int(np.sum(front_ranges < self.safety_dist))
+            if min_dist < self.safety_dist and close_count >= self.min_close_points:
                 stop_msg.data = 1
-                self.get_logger().warn(f"Wall detected at {min_dist:.2f}m! Stopping.")
+                if self.last_stop_state == 0:
+                    self.get_logger().warn(
+                        f"Wall detected at {min_dist:.2f}m (close rays={close_count})! Stopping."
+                    )
             else:
                 stop_msg.data = 0
         else:
             stop_msg.data = 0
-            
+
+        self.last_stop_state = int(stop_msg.data)
         self.pub.publish(stop_msg)
 
 def main(args=None):

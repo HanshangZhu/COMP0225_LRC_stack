@@ -30,6 +30,7 @@ micromamba run -n cmu_env /bin/bash -c "\
   source /home/hz/cmu_exploration_ws/install/setup.bash && \
   export RMW_FASTRTPS_USE_SHM=0 && \
   export FASTRTPS_DEFAULT_PROFILES_FILE=/home/hz/cmu_exploration_ws/fastdds_no_shm.xml && \
+  export RMW_FASTRTPS_USE_QOS_FROM_XML=1 && \
   echo 'Checking Python/numpy (required for robot spawn and bridges)...' && \
   PYTHON_USED=\$(which python3) && \
   python3 -c 'import numpy' 2>/dev/null || { \
