@@ -67,20 +67,20 @@ class ReactiveNavCoordinator:
         if runtime_state.start_time_sec is None:
             runtime_state.start_time_sec = now_sec
         if (now_sec - runtime_state.start_time_sec) < self.cfg.startup_delay:
-            return TickResult(0.0, 0.0, events=events)
+            return TickResult(0.0, 0.0, events=events, diagnostics={"mode": "startup"})
 
         if self.cfg.require_settle_before_motion and not runtime_state.settle_ready:
             if robot_state.speed > self.cfg.settle_speed_threshold:
                 runtime_state.settle_start_time_sec = None
-                return TickResult(0.0, 0.0, events=events)
+                return TickResult(0.0, 0.0, events=events, diagnostics={"mode": "settling"})
 
             if runtime_state.settle_start_time_sec is None:
                 runtime_state.settle_start_time_sec = now_sec
-                return TickResult(0.0, 0.0, events=events)
+                return TickResult(0.0, 0.0, events=events, diagnostics={"mode": "settling"})
 
             settle_elapsed = now_sec - runtime_state.settle_start_time_sec
             if settle_elapsed < self.cfg.settle_hold_sec:
-                return TickResult(0.0, 0.0, events=events)
+                return TickResult(0.0, 0.0, events=events, diagnostics={"mode": "settling"})
 
             runtime_state.settle_ready = True
             events.append(
@@ -92,16 +92,20 @@ class ReactiveNavCoordinator:
             )
 
         if goal_state.x is None or goal_state.y is None:
-            return TickResult(0.0, 0.0, events=events)
+            return TickResult(0.0, 0.0, events=events, diagnostics={"mode": "no_goal"})
 
         if scan is None:
-            return TickResult(0.0, 0.0, events=events)
+            return TickResult(0.0, 0.0, events=events, diagnostics={"mode": "no_scan"})
 
         goal_dx_world = goal_state.x - robot_state.x
         goal_dy_world = goal_state.y - robot_state.y
         dist_to_goal = math.hypot(goal_dx_world, goal_dy_world)
         if dist_to_goal < self.cfg.goal_tolerance:
-            return TickResult(0.0, 0.0, events=events)
+            return TickResult(0.0, 0.0, events=events, diagnostics={
+                "mode": "goal_reached",
+                "goal": [round(goal_state.x, 2), round(goal_state.y, 2)],
+                "dist_goal": round(dist_to_goal, 2),
+            })
 
         goal_angle = math.atan2(goal_dy_world, goal_dx_world)
         heading_err_goal = wrap_angle(goal_angle - robot_state.yaw)
@@ -148,11 +152,20 @@ class ReactiveNavCoordinator:
             goal_dy_world,
             events,
         ):
+            mode = "wall_scan" if scan_action.mode == "scan_turn" else "scan_pause"
             return TickResult(
                 scan_action.linear_x,
                 scan_action.angular_z,
                 request_replan=scan_action.request_replan,
                 events=events,
+                diagnostics={
+                    "mode": mode,
+                    "goal": [round(goal_state.x, 2), round(goal_state.y, 2)],
+                    "dist_goal": round(dist_to_goal, 2),
+                    "min_front": round(scan_metrics.min_front, 2),
+                    "blocked_sec": round(blocked_sec, 1),
+                    "ext_stop": external_stop,
+                },
             )
 
         unstick_action = self.recovery.step_unstick(now_sec, runtime_state)
@@ -171,6 +184,14 @@ class ReactiveNavCoordinator:
                 unstick_action.angular_z,
                 request_replan=unstick_action.request_replan,
                 events=events,
+                diagnostics={
+                    "mode": "unstick",
+                    "goal": [round(goal_state.x, 2), round(goal_state.y, 2)],
+                    "dist_goal": round(dist_to_goal, 2),
+                    "min_front": round(scan_metrics.min_front, 2),
+                    "blocked_sec": round(blocked_sec, 1),
+                    "ext_stop": external_stop,
+                },
             )
 
         blocked_action = self.recovery.maybe_trigger_blocked_recovery(
@@ -199,8 +220,10 @@ class ReactiveNavCoordinator:
 
         target_x = goal_state.x
         target_y = goal_state.y
+        steering_source = "goal"
         if runtime_state.escape_target_world is not None:
             target_x, target_y = runtime_state.escape_target_world
+            steering_source = "escape"
         elif self.cfg.planner_enabled:
             plan_result = self.planner.planner_target_world(
                 now_sec,
@@ -214,6 +237,7 @@ class ReactiveNavCoordinator:
             events.extend(plan_result.events)
             if plan_result.target_world is not None:
                 target_x, target_y = plan_result.target_world
+                steering_source = "planner"
 
         target_dx = target_x - robot_state.x
         target_dy = target_y - robot_state.y
@@ -229,9 +253,31 @@ class ReactiveNavCoordinator:
             external_stop,
         )
 
+        has_plan = len(runtime_state.plan_waypoints_world) > 0
+        plan_wps = len(runtime_state.plan_waypoints_world)
+        escape = None
+        if runtime_state.escape_target_world is not None:
+            escape = [round(runtime_state.escape_target_world[0], 2),
+                      round(runtime_state.escape_target_world[1], 2)]
+
+        diag = {
+            "mode": "navigate",
+            "steer": steering_source,
+            "goal": [round(goal_state.x, 2), round(goal_state.y, 2)],
+            "dist_goal": round(dist_to_goal, 2),
+            "target": [round(target_x, 2), round(target_y, 2)],
+            "min_front": round(scan_metrics.min_front, 2),
+            "blocked_sec": round(blocked_sec, 1),
+            "has_plan": has_plan,
+            "plan_wps": plan_wps,
+            "escape": escape,
+            "ext_stop": external_stop,
+        }
+
         return TickResult(
             linear_x=lin,
             angular_z=ang,
             request_replan=blocked_action.request_replan or unstick_action.request_replan,
             events=events,
+            diagnostics=diag,
         )

@@ -14,14 +14,12 @@ sys.path.append(os.path.dirname(__file__))
 from _stack_components import (
     build_autonomy_enabler_node,
     build_dual_robot_stack,
-    build_frontier_recovery_node,
     build_geometric_frontier_node,
-    build_goalpoint_bridge_node,
-    build_motion_monitor_node,
     build_namespaced_robot_description,
+    build_pointcloud_to_laserscan_node,
+    build_qos_bridge_node,
     build_reactive_nav_node,
     build_rviz_node,
-    build_wall_checker_node,
 )
 
 
@@ -36,39 +34,26 @@ def _robot_autonomy_actions(ns: str, use_sim_time):
         output="screen",
     )
 
-    wall_checker_node = build_wall_checker_node(
+    qos_bridge_node = build_qos_bridge_node(
         ns=ns,
         use_sim_time=use_sim_time,
         extra_params={
-            "safety_dist": 0.24,
-            "scan_topic": f"/{ns}/scan",
-            "stop_topic": f"/{ns}/stop",
-            "check_angle_deg": 22.0,
-            "min_valid_range": 0.12,
-            "min_close_points": 5,
+            "input_topic": f"/{ns}/registered_scan",
+            "output_topic": f"/{ns}/registered_scan_reliable",
         },
     )
 
-    goalpoint_bridge_node = build_goalpoint_bridge_node(
-        ns=ns,
-        use_sim_time=use_sim_time,
-        remappings=[("/goal_point", f"/{ns}/goal_point"), ("/way_point", f"/{ns}/way_point")],
-    )
-
-    frontier_recovery_node = build_frontier_recovery_node(
+    pointcloud_to_laserscan_node = build_pointcloud_to_laserscan_node(
         ns=ns,
         use_sim_time=use_sim_time,
         extra_params={
-            "stop_topic": f"/{ns}/stop",
-            "vgraph_topic": f"/{ns}/robot_vgraph",
-            "odom_topic": f"/{ns}/odom/ground_truth",
-            "goal_topic": f"/{ns}/goal_point",
-            "exploration_frame": "world",
-            "min_frontier_distance": 1.0,
-            "trigger_stop_duration": 1.5,
-            "cooldown_sec": 6.0,
-            "publish_rate": 2.0,
+            "target_frame": f"{ns}/base_link",
         },
+        remappings=tf_remaps
+        + [
+            ("cloud_in", f"/{ns}/registered_scan_reliable"),
+            ("scan", f"/{ns}/scan"),
+        ],
     )
 
     geometric_frontier_node = build_geometric_frontier_node(
@@ -85,17 +70,6 @@ def _robot_autonomy_actions(ns: str, use_sim_time):
             "frontier_replan_topic": f"/{ns}/frontier_replan",
         },
         remappings=tf_remaps,
-    )
-
-    motion_monitor_node = build_motion_monitor_node(
-        ns=ns,
-        use_sim_time=use_sim_time,
-        extra_params={
-            "odom_topic": f"/{ns}/odom/ground_truth",
-            "stop_topic": f"/{ns}/stop",
-            "report_rate": 1.0,
-            "move_threshold": 0.05,
-        },
     )
 
     autonomy_enabler_node = build_autonomy_enabler_node(
@@ -118,6 +92,7 @@ def _robot_autonomy_actions(ns: str, use_sim_time):
             ("/odom/ground_truth", f"/{ns}/odom/ground_truth"),
             ("/scan", f"/{ns}/scan"),
             ("/cmd_vel_stamped", f"/{ns}/cmd_vel_stamped"),
+            ("/nav_status", f"/{ns}/nav_status"),
         ],
     )
 
@@ -126,11 +101,9 @@ def _robot_autonomy_actions(ns: str, use_sim_time):
             period=14.0,
             actions=[
                 twist_bridge_node,
-                wall_checker_node,
-                frontier_recovery_node,
-                goalpoint_bridge_node,
+                qos_bridge_node,
+                pointcloud_to_laserscan_node,
                 geometric_frontier_node,
-                motion_monitor_node,
                 autonomy_enabler_node,
                 reactive_nav_node,
             ],
@@ -257,6 +230,19 @@ def generate_launch_description():
         ekf_footprint_to_odom=ekf_footprint_to_odom,
     ) + _robot_autonomy_actions("robot_b", use_sim_time)
 
+    robot_status_monitor_node = Node(
+        package="go2_gazebo_sim",
+        executable="robot_status_monitor.py",
+        name="robot_status_monitor",
+        parameters=[
+            {"use_sim_time": use_sim_time},
+            {"namespaces": ["robot_a", "robot_b"]},
+            {"report_rate": 1.0},
+            {"json_output": False},
+        ],
+        output="screen",
+    )
+
     return LaunchDescription(
         [
             DeclareLaunchArgument("use_sim_time", default_value="true"),
@@ -282,5 +268,6 @@ def generate_launch_description():
             dual_coverage_visualizer_node,
             TimerAction(period=2.0, actions=robot_a_actions),
             TimerAction(period=4.0, actions=robot_b_actions),
+            TimerAction(period=20.0, actions=[robot_status_monitor_node]),
         ]
     )

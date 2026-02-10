@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Thin ROS adapter for layered reactive navigation."""
 
+import json
 import math
 
 import rclpy
@@ -9,7 +10,7 @@ from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan
-from std_msgs.msg import Empty, Int8
+from std_msgs.msg import Empty, Int8, String
 
 from reactive_nav_core import GoalState, NavRuntimeState, ReactiveNavConfig, ReactiveNavCoordinator, RobotState
 
@@ -34,6 +35,7 @@ class ReactiveNav(Node):
 
         self.cmd_pub = self.create_publisher(TwistStamped, "/cmd_vel_stamped", 10)
         self.replan_pub = self.create_publisher(Empty, self.cfg.frontier_replan_topic, 10)
+        self.status_pub = self.create_publisher(String, "/nav_status", 10)
 
         self.timer = self.create_timer(1.0 / self.cfg.control_rate, self.control_loop)
         self.get_logger().info("Reactive nav started")
@@ -92,6 +94,16 @@ class ReactiveNav(Node):
         msg.twist.angular.z = float(result.angular_z)
         self.cmd_pub.publish(msg)
 
+        # Publish diagnostics for CLI monitoring
+        diag = result.diagnostics.copy()
+        diag["pos"] = [round(self.robot_state.x, 2), round(self.robot_state.y, 2)]
+        diag["yaw"] = round(math.degrees(self.robot_state.yaw), 1)
+        diag["speed"] = round(self.robot_state.speed, 3)
+        diag["cmd"] = [round(result.linear_x, 3), round(result.angular_z, 3)]
+        status_msg = String()
+        status_msg.data = json.dumps(diag, separators=(",", ":"))
+        self.status_pub.publish(status_msg)
+
     @staticmethod
     def _yaw_from_quat(x: float, y: float, z: float, w: float) -> float:
         siny = 2.0 * (w * z + x * y)
@@ -112,3 +124,4 @@ def main(args=None) -> None:
 
 if __name__ == "__main__":
     main()
+

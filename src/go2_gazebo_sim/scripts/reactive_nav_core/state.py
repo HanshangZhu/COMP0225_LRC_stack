@@ -57,3 +57,4 @@ class TickResult:
     angular_z: float
     request_replan: bool = False
     events: list[tuple[str, str]] = field(default_factory=list)
+    diagnostics: dict = field(default_factory=dict)

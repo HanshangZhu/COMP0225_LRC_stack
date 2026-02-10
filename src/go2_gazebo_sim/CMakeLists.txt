@@ -45,6 +45,7 @@ install(PROGRAMS
   scripts/autonomy_enabler.py
   scripts/reactive_nav.py
   scripts/dual_map_coverage_visualizer.py
+  scripts/robot_status_monitor.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
