@@ -46,6 +46,9 @@ install(PROGRAMS
   scripts/reactive_nav.py
   scripts/dual_map_coverage_visualizer.py
   scripts/robot_status_monitor.py
+  scripts/odom_comparison.py
+  scripts/slam_odom_relay.py
+  scripts/pointcloud_adapter.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
