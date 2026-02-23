@@ -31,6 +31,21 @@ colcon build --packages-select go2_issac_stack
 source install/setup.bash
 ```
 
+## External Repositories
+- FAST-LIO (ROS2 fork used in this workspace): `https://github.com/Ericsii/FAST_LIO_ROS2`
+- Unitree Go2 ROS2 stack: `https://github.com/anujjain-dev/unitree-go2-ros2.git`
+- Unitree USD/model assets: `https://huggingface.co/datasets/unitreerobotics/unitree_model`
+
+If cloning this workspace fresh, pull submodules too:
+```bash
+git clone --recurse-submodules <MAIN_REPO_URL>
+```
+
+If already cloned:
+```bash
+git submodule update --init --recursive
+```
+
 ## Run (Shell Profiles)
 ```bash
 cd /home/hz/cmu_exploration_ws
