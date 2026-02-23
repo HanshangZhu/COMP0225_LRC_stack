@@ -81,8 +81,12 @@ def _build_wall_cache(walls: list[single.WallBox]) -> object | None:
 class DualRobotBridge:
     def __init__(self, robot_specs: dict[str, RobotRuntime], rcl_node: object):
         from geometry_msgs.msg import Twist
+        from rosgraph_msgs.msg import Clock
         self.robot_specs = robot_specs
         self.node = rcl_node
+        self.latest_clock_msg = None
+        self.latest_clock_sec = None
+        self.clock_sub = self.node.create_subscription(Clock, "/clock", self._clock_cb, 10)
         for ns, robot in self.robot_specs.items():
             # Bind closures to capture the namespace
             def make_cb(r):
@@ -90,6 +94,10 @@ class DualRobotBridge:
             robot.cmd_sub = self.node.create_subscription(
                 Twist, f"/{ns}/isaac/cmd_vel", make_cb(robot), 10
             )
+
+    def _clock_cb(self, msg):
+        self.latest_clock_msg = msg.clock
+        self.latest_clock_sec = float(msg.clock.sec) + float(msg.clock.nanosec) / 1e9
 
     def _cmd_cb(self, robot: RobotRuntime, msg: Twist):
         robot.cmd_linear = float(max(-robot.max_linear_speed, min(robot.max_linear_speed, msg.linear.x)))
@@ -99,6 +107,8 @@ class DualRobotBridge:
     def step(self, dt: float, dynamic_physics: bool, cmd_timeout: float):
         now = time.monotonic()
         for ns, robot in self.robot_specs.items():
+            linear = 0.0
+            angular = 0.0
             # 1. Update Kinematics (if not dynamic)
             if not dynamic_physics:
                 cmd_stale = (robot.last_cmd_wall_t <= 0.0) or ((now - robot.last_cmd_wall_t) > cmd_timeout)
@@ -126,13 +136,24 @@ class DualRobotBridge:
                 robot.pose.yaw = new_yaw
             
             # 2. Update sim time and handle CPU Lidar
-            robot.sim_time += dt
+            # Keep CPU lidar stamps in the same time domain as odom/TF by
+            # tracking Isaac /clock (falls back to local integration until
+            # /clock is available).
+            if self.latest_clock_sec is not None:
+                robot.sim_time = self.latest_clock_sec
+            else:
+                robot.sim_time += dt
+
+            if not dynamic_physics:
+                self._publish_kinematic_odom_imu(robot, dt, linear, angular)
+
             if robot.lidar_mode == "cpu":
+                if robot.pointcloud_period > 0.0 and robot.next_pointcloud_t <= 0.0:
+                    robot.next_pointcloud_t = robot.sim_time
                 if robot.pointcloud_period <= 0.0 or robot.sim_time >= robot.next_pointcloud_t:
                     self._publish_cpu_pointcloud(robot)
                     if robot.pointcloud_period > 0.0:
-                        while robot.next_pointcloud_t <= robot.sim_time:
-                            robot.next_pointcloud_t += robot.pointcloud_period
+                        robot.next_pointcloud_t = robot.sim_time + robot.pointcloud_period
 
     def _publish_cpu_pointcloud(self, robot: RobotRuntime):
         from std_msgs.msg import Header
@@ -140,7 +161,11 @@ class DualRobotBridge:
         from sensor_msgs_py import point_cloud2
 
         header = Header()
-        header.stamp = single._stamp_from_seconds(type(header.stamp), robot.sim_time)
+        if self.latest_clock_msg is not None:
+            header.stamp.sec = int(self.latest_clock_msg.sec)
+            header.stamp.nanosec = int(self.latest_clock_msg.nanosec)
+        else:
+            header.stamp = single._stamp_from_seconds(type(header.stamp), robot.sim_time)
         header.frame_id = "base_link"
         points = []
 
@@ -170,6 +195,52 @@ class DualRobotBridge:
         ]
         msg = point_cloud2.create_cloud(header, fields, points)
         robot.pc_pub.publish(msg)
+
+    def _publish_kinematic_odom_imu(self, robot: RobotRuntime, dt: float, linear_speed: float, angular_speed: float):
+        from nav_msgs.msg import Odometry
+        from sensor_msgs.msg import Imu
+
+        # Odom follows the synthetic kinematic state used by CPU lidar.
+        odom = Odometry()
+        if self.latest_clock_msg is not None:
+            odom.header.stamp.sec = int(self.latest_clock_msg.sec)
+            odom.header.stamp.nanosec = int(self.latest_clock_msg.nanosec)
+        else:
+            odom.header.stamp = single._stamp_from_seconds(type(odom.header.stamp), robot.sim_time)
+        odom.header.frame_id = "world"
+        odom.child_frame_id = "base_link"
+        odom.pose.pose.position.x = robot.pose.x
+        odom.pose.pose.position.y = robot.pose.y
+        odom.pose.pose.position.z = robot.robot_z
+        qx, qy, qz, qw = single._quat_from_yaw(robot.pose.yaw)
+        odom.pose.pose.orientation.x = qx
+        odom.pose.pose.orientation.y = qy
+        odom.pose.pose.orientation.z = qz
+        odom.pose.pose.orientation.w = qw
+        odom.twist.twist.linear.x = linear_speed
+        odom.twist.twist.angular.z = angular_speed
+        if robot.odom_pub is not None:
+            robot.odom_pub.publish(odom)
+
+        # Lightweight IMU proxy (orientation + angular + coarse linear acc).
+        imu = Imu()
+        if self.latest_clock_msg is not None:
+            imu.header.stamp.sec = int(self.latest_clock_msg.sec)
+            imu.header.stamp.nanosec = int(self.latest_clock_msg.nanosec)
+        else:
+            imu.header.stamp = single._stamp_from_seconds(type(imu.header.stamp), robot.sim_time)
+        imu.header.frame_id = "imu_link"
+        imu.orientation.x = qx
+        imu.orientation.y = qy
+        imu.orientation.z = qz
+        imu.orientation.w = qw
+        imu.angular_velocity.z = angular_speed
+        lin_acc = 0.0 if dt <= 1e-6 else (linear_speed - robot.prev_lin) / dt
+        robot.prev_lin = linear_speed
+        imu.linear_acceleration.x = lin_acc
+        imu.linear_acceleration.z = 9.81
+        if robot.imu_pub is not None:
+            robot.imu_pub.publish(imu)
 
     def _raycast_robot_vectorized(self, robot: RobotRuntime):
         if np is None:
@@ -413,11 +484,14 @@ def _create_ros2_base_graph(
             target_prim_paths=[target_art_path],
         )
     
-    # 2. Bind Odometry Publisher to the Robot Root
+    # 2. Bind Odometry Publisher to the motion-driving prim.
+    # In kinematic mode we move `pose_prim_path` directly, so odom must read
+    # that prim (binding to robot_prim_path only yields local identity).
+    odom_chassis_prim = robot_prim_path if enable_articulation_control else pose_prim_path
     set_targets(
         prim=stage.GetPrimAtPath(f"{graph_path}/OdomPub"),
         attribute="inputs:chassisPrim",
-        target_prim_paths=[robot_prim_path],
+        target_prim_paths=[odom_chassis_prim],
     )
     
     # 3. Bind IMU Publisher to the actual imu_link inside the robot
@@ -439,7 +513,10 @@ def _create_ros2_base_graph(
             f"Articulation root: {target_art_path}"
         )
     else:
-        print(f"[{ns}] Created OmniGraph Action Graph publishing /odom and /imu (kinematic mode)")
+        print(
+            f"[{ns}] Created OmniGraph Action Graph publishing /odom and /imu (kinematic mode) "
+            f"| odom_chassis={odom_chassis_prim}"
+        )
     _debug_graph_timestamp_input(graph_path, "OdomPub")
     _debug_graph_timestamp_input(graph_path, "ImuPub")
     if enable_articulation_control:
@@ -654,7 +731,8 @@ def main() -> int:
     import omni.timeline
     import omni.usd
     import rclpy
-    from sensor_msgs.msg import PointCloud2
+    from nav_msgs.msg import Odometry
+    from sensor_msgs.msg import Imu, PointCloud2
 
     stage_ctx = omni.usd.get_context()
     stage_ctx.new_stage()
@@ -682,6 +760,9 @@ def main() -> int:
     bridge = DualRobotBridge(robot_specs, rcl_node)
 
     for ns, robot in robot_specs.items():
+        if not args.enable_dynamic_physics:
+            robot.odom_pub = rcl_node.create_publisher(Odometry, f"/{ns}/odom", 10)
+            robot.imu_pub = rcl_node.create_publisher(Imu, f"/{ns}/imu", 10)
         robot.pc_pub = rcl_node.create_publisher(PointCloud2, f"/{ns}/lidar/points", 10)
 
     
@@ -716,14 +797,21 @@ def main() -> int:
     signal.signal(signal.SIGINT, _request_stop)
     signal.signal(signal.SIGTERM, _request_stop)
 
-    for ns, robot in robot_specs.items():
-        _create_ros2_base_graph(
-            ns,
-            robot.robot_prim_path,
-            robot.pose_prim_path,
-            args.max_linear_speed,
-            args.max_angular_speed,
-            enable_articulation_control=args.enable_dynamic_physics,
+    if args.enable_dynamic_physics:
+        for ns, robot in robot_specs.items():
+            _create_ros2_base_graph(
+                ns,
+                robot.robot_prim_path,
+                robot.pose_prim_path,
+                args.max_linear_speed,
+                args.max_angular_speed,
+                enable_articulation_control=True,
+            )
+    else:
+        print(
+            "[isaac_dual_bringup] Kinematic mode: using Python /odom and /imu publishers; "
+            "skipping OmniGraph base odom/imu graph.",
+            flush=True,
         )
     
     _create_ros_global_graph()

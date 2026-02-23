@@ -200,6 +200,7 @@ def _build_exploration_nodes(
     frontier_costmap_stale_sec,
     planning_scan_min_height,
     planning_scan_max_height,
+    planning_scan_range_min,
     planning_scan_range_max,
     mapper_update_rate,
     frontier_update_rate,
@@ -216,6 +217,7 @@ def _build_exploration_nodes(
             "transform_tolerance": 2.0,
             "min_height": ParameterValue(planning_scan_min_height, value_type=float),
             "max_height": ParameterValue(planning_scan_max_height, value_type=float),
+            "range_min": ParameterValue(planning_scan_range_min, value_type=float),
             "range_max": ParameterValue(planning_scan_range_max, value_type=float),
         },
         remappings=tf_remaps
@@ -232,8 +234,8 @@ def _build_exploration_nodes(
         "map_frame": "world",
         "startup_delay": 0.0,
         "update_rate": ParameterValue(mapper_update_rate, value_type=float),
-        # Isaac bridge jitter can exceed tight bounds; keep permissive.
-        "max_scan_odom_dt": 1.00,
+        # Keep scan/odom pairing tight to avoid map smear from stale pose.
+        "max_scan_odom_dt": 0.10,
         "odom_history_sec": 2.0,
     }
     simple_scan_mapper_cpp_node = build_simple_scan_mapper_node(
@@ -325,6 +327,7 @@ def _robot_autonomy_actions(
     enable_champ_stack,
     planning_scan_min_height,
     planning_scan_max_height,
+    planning_scan_range_min,
     planning_scan_range_max,
     mapper_update_rate,
     frontier_update_rate,
@@ -352,6 +355,7 @@ def _robot_autonomy_actions(
         frontier_costmap_stale_sec=frontier_costmap_stale_sec,
         planning_scan_min_height=planning_scan_min_height,
         planning_scan_max_height=planning_scan_max_height,
+        planning_scan_range_min=planning_scan_range_min,
         planning_scan_range_max=planning_scan_range_max,
         mapper_update_rate=mapper_update_rate,
         frontier_update_rate=frontier_update_rate,
@@ -459,6 +463,7 @@ def generate_launch_description():
     frontier_costmap_stale_sec = LaunchConfiguration("frontier_costmap_stale_sec")
     planning_scan_min_height = LaunchConfiguration("planning_scan_min_height")
     planning_scan_max_height = LaunchConfiguration("planning_scan_max_height")
+    planning_scan_range_min = LaunchConfiguration("planning_scan_range_min")
     planning_scan_range_max = LaunchConfiguration("planning_scan_range_max")
     mapper_update_rate = LaunchConfiguration("mapper_update_rate")
     frontier_update_rate = LaunchConfiguration("frontier_update_rate")
@@ -694,6 +699,7 @@ def generate_launch_description():
                 enable_champ_stack,
                 planning_scan_min_height,
                 planning_scan_max_height,
+                planning_scan_range_min,
                 planning_scan_range_max,
                 mapper_update_rate,
                 frontier_update_rate,
@@ -816,6 +822,11 @@ def generate_launch_description():
                 description="Upper z clip used when converting point cloud to planning LaserScan. "
                             "Set high (2.0) so RTX lidar beams at ±45° elevation pass through "
                             "even for wall hits at max range.",
+            ),
+            DeclareLaunchArgument(
+                "planning_scan_range_min",
+                default_value="0.05",
+                description="Min range used for planning LaserScan projection.",
             ),
             DeclareLaunchArgument(
                 "planning_scan_range_max",

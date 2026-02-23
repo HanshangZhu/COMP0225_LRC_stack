@@ -59,6 +59,7 @@ def generate_launch_description():
     frontier_costmap_stale_sec = LaunchConfiguration("frontier_costmap_stale_sec")
     planning_scan_min_height = LaunchConfiguration("planning_scan_min_height")
     planning_scan_max_height = LaunchConfiguration("planning_scan_max_height")
+    planning_scan_range_min = LaunchConfiguration("planning_scan_range_min")
     planning_scan_range_max = LaunchConfiguration("planning_scan_range_max")
 
     rviz_config = os.path.join(pkg, "rviz", "dual_isaac_autonomy.rviz")
@@ -297,6 +298,7 @@ def generate_launch_description():
             "transform_tolerance": 2.0,
             "min_height": ParameterValue(planning_scan_min_height, value_type=float),
             "max_height": ParameterValue(planning_scan_max_height, value_type=float),
+            "range_min": ParameterValue(planning_scan_range_min, value_type=float),
             "range_max": ParameterValue(planning_scan_range_max, value_type=float),
         },
         remappings=tf_remaps
@@ -515,6 +517,11 @@ def generate_launch_description():
                 "planning_scan_max_height",
                 default_value="2.0",
                 description="Upper z clip used when converting point cloud to planning LaserScan.",
+            ),
+            DeclareLaunchArgument(
+                "planning_scan_range_min",
+                default_value="0.05",
+                description="Min range used for planning LaserScan projection.",
             ),
             DeclareLaunchArgument(
                 "planning_scan_range_max",

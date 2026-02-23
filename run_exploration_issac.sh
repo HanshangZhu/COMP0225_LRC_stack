@@ -57,8 +57,9 @@ case "$PROFILE" in
       frontier_prefer_costmap:=true \
       mapper_update_rate:=2.0 \
       frontier_update_rate:=2.0 \
-      planning_scan_min_height:=-1.0 \
-      planning_scan_max_height:=2.0 \
+      planning_scan_min_height:=0.10 \
+      planning_scan_max_height:=0.80 \
+      planning_scan_range_min:=0.25 \
       planning_scan_range_max:=12.0 \
       isaac_robot_usd:="$USD_PATH"
     ;;
