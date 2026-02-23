@@ -46,6 +46,9 @@ class ScanAnalyzer:
         right_push = right_push_sum / right_count if right_count > 0 else 0.0
         rear_clearance = self.rear_clearance(scan)
 
+        # DEBUG: Print scan analysis
+        # print(f"DEBUG: min_front={min_front:.3f} left={left_push:.3f} right={right_push:.3f} rear={rear_clearance:.3f}")
+
         return ScanMetrics(
             min_front=min_front,
             left_push=left_push,

@@ -1,44 +1,57 @@
-# CMU-Exploration (Forked) <!-- title -->
-This repo is a forked variant of CMU-Exploration with a Gazebo stack under active development. <!-- summary -->
-The original CMU codebases are preserved as submodules. <!-- constraint -->
-Use the Gazebo stack for simulation iteration and debugging. <!-- intent -->
- <!-- spacer -->
-## Quick Start (Gazebo) <!-- section -->
-1) Ensure the `cmu_env` environment exists (see Installation). <!-- step -->
-2) Run: `./start_exploration.sh`. <!-- step -->
-3) Open RViz to visualize frontier markers and goals. <!-- step -->
-4) Observe robot motion in Gazebo. <!-- step -->
- <!-- spacer -->
-## Installation <!-- section -->
-1) Create/update the conda environment from `cmu_env.yml`: <!-- step -->
-   - `micromamba env create -f cmu_env.yml` <!-- cmd -->
-   - If it already exists: `micromamba env update -n cmu_env -f cmu_env.yml --prune` <!-- cmd -->
-2) Build the workspace (from repo root): <!-- step -->
-   - `source /opt/ros/humble/setup.bash` <!-- cmd -->
-   - `colcon build --symlink-install --cmake-clean-cache --cmake-args -DPython3_EXECUTABLE=$CONDA_PREFIX/bin/python3` <!-- cmd -->
-3) Load runtime environment in each shell: <!-- step -->
-   - `source setup_cmu_env.bash` <!-- cmd -->
-4) Launch simulation: <!-- step -->
-   - `./start_exploration.sh` <!-- cmd -->
- <!-- spacer -->
-## Reproducibility <!-- section -->
-1) Follow `REPRO.md` for clean-machine recreation steps. <!-- step -->
-2) Run `./tools/smoke_check.sh` while simulation is running. <!-- step -->
-3) Record version pins before sharing results: <!-- step -->
-   - `git rev-parse HEAD` <!-- cmd -->
-   - `git submodule status` <!-- cmd -->
- <!-- spacer -->
-## Project Layout <!-- section -->
-- `src/go2_gazebo_sim/` — Gazebo simulation stack (launch, scripts, worlds). <!-- map -->
-- `src/go2_gazebo_sim/launch/full_autonomy.launch.py` — Main entry point for single-robot autonomy. <!-- map -->
-- `src/autonomy_stack_go2/` — CMU autonomy stack (submodule). <!-- map -->
-- `src/unitree-go2-ros2/` — Unitree Go2 ROS 2 stack (submodule). <!-- map -->
-- `cmu_env.yml` — pinned `micromamba` environment for this workspace. <!-- map -->
-- `REPRO.md` — deterministic setup/build/run verification procedure. <!-- map -->
-- `tools/smoke_check.sh` — runtime signal validator for fallback demo. <!-- map -->
-- `WALKTHROUGH.md` — detailed Gazebo stack walkthrough. <!-- map -->
- <!-- spacer -->
-## Notes <!-- section -->
-- This repo uses 2D lidar for exploration in a single-robot Gazebo environment. <!-- note -->
-- CMU planner integration requires 3D sensing; not enabled by default here. <!-- note -->
-- Build artifacts are ignored via `.gitignore`. <!-- note -->
+# CMU Exploration Workspace (Isaac Stream)
+
+Primary workflow in this repo is the `cmu_isaac` stream.
+
+## Quick Start
+1. Create or update the `cmu_isaac` environment from `cmu_isaac.yml`.
+2. Build the workspace with `colcon`.
+3. Run `run_exploration_issac.sh` using either autonomy baseline (synthetic GT pointcloud) or sensor realism (RTX lidar).
+
+## Environment Setup (`cmu_isaac`)
+```bash
+cd /home/hz/cmu_exploration_ws
+source /home/hz/miniforge3/etc/profile.d/conda.sh
+conda env create -f cmu_isaac.yml
+```
+
+If env already exists:
+```bash
+cd /home/hz/cmu_exploration_ws
+source /home/hz/miniforge3/etc/profile.d/conda.sh
+conda env update -n cmu_isaac -f cmu_isaac.yml --prune
+```
+
+## Build
+```bash
+cd /home/hz/cmu_exploration_ws
+source /home/hz/miniforge3/etc/profile.d/conda.sh
+conda activate cmu_isaac
+source /opt/ros/humble/setup.bash
+colcon build --packages-select go2_issac_stack
+source install/setup.bash
+```
+
+## Run (Shell Profiles)
+```bash
+cd /home/hz/cmu_exploration_ws
+bash run_exploration_issac.sh autonomy_baseline
+```
+
+```bash
+cd /home/hz/cmu_exploration_ws
+bash run_exploration_issac.sh sensor_realism
+```
+
+Available profiles:
+- `autonomy_baseline`: CPU synthetic raycast pointcloud (GT geometry), stable autonomy baseline.
+- `sensor_realism`: native RTX lidar stream, realism branch for sensor validation.
+- `debug`: higher-fidelity debug profile.
+
+Aliases:
+- `balanced` -> `autonomy_baseline`
+- `perf` -> `sensor_realism`
+
+## Notes
+- Main Isaac launch lives in `go2_issac_stack`.
+- Perception source is swappable while downstream mapping/frontier/controller stays unchanged.
+- For detailed package internals, see `src/go2_issac_stack/README.md`.

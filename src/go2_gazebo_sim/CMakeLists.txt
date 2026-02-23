@@ -28,19 +28,9 @@ install(DIRECTORY
 # Install Python scripts
 install(PROGRAMS
   scripts/qos_bridge.py
-  scripts/send_goal.py
-  scripts/frontier_explorer.py
-  scripts/frontier_recovery.py
-  scripts/goalpoint_to_waypoint.py
-  scripts/simple_frontier_nav.py
   scripts/geometric_frontier.py
-  scripts/gazebo_frontier_visual.py
-  scripts/motion_monitor.py
-  scripts/debug_path_follower.py
   scripts/twist_bridge.py
   scripts/wall_collision_checker.py
-  scripts/simple_goal_follower.py
-  scripts/waypoint_follower.py
   scripts/stand_up_slowly.py
   scripts/autonomy_enabler.py
   scripts/reactive_nav.py
@@ -49,6 +39,10 @@ install(PROGRAMS
   scripts/odom_comparison.py
   scripts/slam_odom_relay.py
   scripts/pointcloud_adapter.py
+  scripts/initial_pose_guard.py
+  scripts/multi_robot_goal_assigner.py
+  scripts/spawn_drift_monitor.py
+  scripts/spawn_entity_direct.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

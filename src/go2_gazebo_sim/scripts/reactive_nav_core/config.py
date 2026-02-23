@@ -9,6 +9,7 @@ class ReactiveNavConfig:
     max_linear_speed: float = 0.35
     max_angular_speed: float = 0.8
     goal_tolerance: float = 0.8
+    goal_reached_replan_cooldown_sec: float = 2.0
     obstacle_slow_dist: float = 0.6
     obstacle_stop_dist: float = 0.25
     front_half_angle_deg: float = 40.0
@@ -89,6 +90,7 @@ class ReactiveNavConfig:
             "max_linear_speed": defaults.max_linear_speed,
             "max_angular_speed": defaults.max_angular_speed,
             "goal_tolerance": defaults.goal_tolerance,
+            "goal_reached_replan_cooldown_sec": defaults.goal_reached_replan_cooldown_sec,
             "obstacle_slow_dist": defaults.obstacle_slow_dist,
             "obstacle_stop_dist": defaults.obstacle_stop_dist,
             "front_half_angle_deg": defaults.front_half_angle_deg,
@@ -158,6 +160,7 @@ class ReactiveNavConfig:
             "max_linear_speed",
             "max_angular_speed",
             "goal_tolerance",
+            "goal_reached_replan_cooldown_sec",
             "obstacle_slow_dist",
             "obstacle_stop_dist",
             "front_half_angle_deg",

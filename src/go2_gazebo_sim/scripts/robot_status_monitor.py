@@ -52,6 +52,9 @@ class RobotInfo:
         self.map_free: int = 0
         self.map_occ: int = 0
         self.map_total: int = 0
+        self.path_total_m: float = 0.0
+        self._last_path_x: Optional[float] = None
+        self._last_path_y: Optional[float] = None
 
 
 class RobotStatusMonitor(Node):
@@ -59,7 +62,7 @@ class RobotStatusMonitor(Node):
         super().__init__("robot_status_monitor")
 
         self.declare_parameter("namespaces", ["robot_a", "robot_b"])
-        self.declare_parameter("report_rate", 1.0)
+        self.declare_parameter("report_rate", 0.1)
         self.declare_parameter("json_output", False)
 
         namespaces = self.get_parameter("namespaces").value
@@ -129,8 +132,14 @@ class RobotStatusMonitor(Node):
 
     def _odom_cb(self, msg: Odometry, ns: str):
         r = self.robots[ns]
-        r.x = msg.pose.pose.position.x
-        r.y = msg.pose.pose.position.y
+        x = msg.pose.pose.position.x
+        y = msg.pose.pose.position.y
+        if r._last_path_x is not None and r._last_path_y is not None:
+            r.path_total_m += math.hypot(x - r._last_path_x, y - r._last_path_y)
+        r._last_path_x = x
+        r._last_path_y = y
+        r.x = x
+        r.y = y
         q = msg.pose.pose.orientation
         siny = 2.0 * (q.w * q.z + q.x * q.y)
         cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
@@ -215,7 +224,8 @@ class RobotStatusMonitor(Node):
             f"[{ns}] pos={pos} v={vel} goal={goal} d={dist} "
             f"cmd={cmd_str} mode={mode} steer={steer} "
             f"plan={plan_wps}wp mf={mf} blk={blk} stop={r.stop} "
-            f"fronts={r.frontier_cluster_count} map={known_pct}%"
+            f"fronts={r.frontier_cluster_count} map={known_pct}% "
+            f"disp={r.path_total_m:.2f}m"
             f"{esc_str}"
         )
         self.get_logger().info(line)

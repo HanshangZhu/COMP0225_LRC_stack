@@ -1,0 +1,83 @@
+add_raycast_sequence
+add_raycast_sequence(self: omni.kit.raycast.query._omni_kit_raycast_query.IRaycastQuery) -> int
+
+
+                Add a sequence of raycast queries that maintains last valid value
+                  and will execute raycast on current scene.
+
+                Returns:
+                    int: Sequence id in raycast sequence for added.
+            
+
+----
+get_latest_result_from_raycast_sequence
+get_latest_result_from_raycast_sequence(self: omni.kit.raycast.query._omni_kit_raycast_query.IRaycastQuery, arg0: int) -> Tuple[omni.kit.raycast.query._omni_kit_raycast_query.Ray, omni.kit.raycast.query._omni_kit_raycast_query.RayQueryResult]
+
+
+                Get latest result from a sequence of raycasts.
+
+                Args:
+                    sequenceId (int): Sequence id returned by addRaycastSequence.
+
+                Returns:
+                    Tuple(:obj:'Ray', :obj:'Result'): Latest ray that was resolved and result of the ray request.
+            
+
+----
+remove_raycast_sequence
+remove_raycast_sequence(self: omni.kit.raycast.query._omni_kit_raycast_query.IRaycastQuery, arg0: int) -> omni.kit.raycast.query._omni_kit_raycast_query.Result
+
+
+                Remove a sequence of raycasts.
+
+                Args:
+                    sequenceId (int): Sequence id to removed from RaycastSequence.
+
+                Returns:
+                    :obj:'Result': Error code if function failed.
+            
+
+----
+set_raycast_sequence_array_size
+set_raycast_sequence_array_size(self: omni.kit.raycast.query._omni_kit_raycast_query.IRaycastQuery, arg0: int, arg1: int) -> omni.kit.raycast.query._omni_kit_raycast_query.Result
+
+
+                Set the size of the raycast sequence.
+
+                Args:
+                    sequenceId (int): Sequence id returned by addRaycastSequence.
+                    size (int): Number of ray casts in sequence.
+
+                Returns:
+                    :obj:'Result': Error code if function failed.
+            
+
+----
+submit_ray_to_raycast_sequence
+submit_ray_to_raycast_sequence(self: omni.kit.raycast.query._omni_kit_raycast_query.IRaycastQuery, arg0: int, arg1: omni.kit.raycast.query._omni_kit_raycast_query.Ray) -> omni.kit.raycast.query._omni_kit_raycast_query.Result
+
+
+                Submit a new ray request to a sequence of raycasts.
+
+                Args:
+                    sequenceId (int): Sequence id returned by addRaycastSequence.
+                    ray (:obj:'Ray'): The ray to submit.
+
+                Returns:
+                    :obj:'Result': Error code if function failed.
+            
+
+----
+submit_raycast_query
+submit_raycast_query(self: omni.kit.raycast.query._omni_kit_raycast_query.IRaycastQuery, ray: omni.kit.raycast.query._omni_kit_raycast_query.Ray, callback: Callable[[omni.kit.raycast.query._omni_kit_raycast_query.Ray, omni.kit.raycast.query._omni_kit_raycast_query.RayQueryResult], None]) -> None
+
+
+                This function adds a raycast query operation in the current scene.
+
+                Args:
+                    ray (:obj:'Ray'): The ray to submit.
+                    callback (Callable): The callback lambda function to execute when resolved.
+                        function signature: void(Ray, RayQueryResult)
+            
+
+----

@@ -26,7 +26,15 @@ class ReactiveNav(Node):
         self.goal_state = GoalState()
         self.runtime_state = NavRuntimeState()
         self.last_scan: LaserScan | None = None
+        self.last_scan_rx_sec: float | None = None
         self.external_stop = 0
+        self.last_stop_rx_sec: float | None = None
+        self.stop_msg_count = 0
+        self.path_total_m = 0.0
+        self.prev_odom_x: float | None = None
+        self.prev_odom_y: float | None = None
+        self.last_summary_sec: float | None = None
+        self.summary_interval_sec = 10.0
 
         self.create_subscription(PointStamped, "/way_point", self.goal_cb, 10)
         self.create_subscription(Odometry, "/odom/ground_truth", self.odom_cb, 10)
@@ -37,15 +45,6 @@ class ReactiveNav(Node):
         self.replan_pub = self.create_publisher(Empty, self.cfg.frontier_replan_topic, 10)
         self.status_pub = self.create_publisher(String, "/nav_status", 10)
 
-        # --- CSV Logging Setup ---
-        import time
-        import os
-        ns_sanitized = self.get_namespace().strip("/").replace("/", "_")
-        self.csv_path = f"/tmp/reactive_nav_log_{ns_sanitized}_{int(time.time())}.csv"
-        self.get_logger().info(f"Logging navigation data to: {self.csv_path}")
-        with open(self.csv_path, "w") as f:
-            f.write("timestamp,mode,x,y,yaw,goal_x,goal_y,dist_to_goal,min_obst_dist,cmd_vx,cmd_wz,replan\n")
-
         self.timer = self.create_timer(1.0 / self.cfg.control_rate, self.control_loop)
         self.get_logger().info("Reactive nav started")
 
@@ -55,11 +54,15 @@ class ReactiveNav(Node):
         self.runtime_state.plan_waypoints_world = []
         self.runtime_state.plan_last_time_sec = None
         self.runtime_state.plan_last_goal = None
-        self.get_logger().info(f"New goal: ({self.goal_state.x:.2f}, {self.goal_state.y:.2f})")
+        self.get_logger().debug(f"New goal: ({self.goal_state.x:.2f}, {self.goal_state.y:.2f})")
 
     def odom_cb(self, msg: Odometry) -> None:
         self.robot_state.x = msg.pose.pose.position.x
         self.robot_state.y = msg.pose.pose.position.y
+        if self.prev_odom_x is not None and self.prev_odom_y is not None:
+            self.path_total_m += math.hypot(self.robot_state.x - self.prev_odom_x, self.robot_state.y - self.prev_odom_y)
+        self.prev_odom_x = self.robot_state.x
+        self.prev_odom_y = self.robot_state.y
         q = msg.pose.pose.orientation
         self.robot_state.yaw = self._yaw_from_quat(q.x, q.y, q.z, q.w)
         vx = msg.twist.twist.linear.x
@@ -68,9 +71,12 @@ class ReactiveNav(Node):
 
     def scan_cb(self, msg: LaserScan) -> None:
         self.last_scan = msg
+        self.last_scan_rx_sec = self.get_clock().now().nanoseconds / 1e9
 
     def stop_cb(self, msg: Int8) -> None:
         self.external_stop = int(msg.data)
+        self.last_stop_rx_sec = self.get_clock().now().nanoseconds / 1e9
+        self.stop_msg_count += 1
 
     def control_loop(self) -> None:
         now = self.get_clock().now()
@@ -91,7 +97,7 @@ class ReactiveNav(Node):
             elif level == "error":
                 self.get_logger().error(message)
             else:
-                self.get_logger().info(message)
+                self.get_logger().debug(message)
 
         if result.request_replan:
             self.replan_pub.publish(Empty())
@@ -109,27 +115,38 @@ class ReactiveNav(Node):
         diag["yaw"] = round(math.degrees(self.robot_state.yaw), 1)
         diag["speed"] = round(self.robot_state.speed, 3)
         diag["cmd"] = [round(result.linear_x, 3), round(result.angular_z, 3)]
+        diag["stop_msgs"] = self.stop_msg_count
+        diag["scan_age_sec"] = (
+            None if self.last_scan_rx_sec is None else round(max(0.0, now_sec - self.last_scan_rx_sec), 2)
+        )
+        diag["stop_age_sec"] = (
+            None if self.last_stop_rx_sec is None else round(max(0.0, now_sec - self.last_stop_rx_sec), 2)
+        )
+
         status_msg = String()
         status_msg.data = json.dumps(diag, separators=(",", ":"))
         self.status_pub.publish(status_msg)
+        self._maybe_log_local_summary(now_sec, diag, result.linear_x, result.angular_z)
 
-        # Append to CSV Log
-        # Columns: timestamp,mode,x,y,yaw,goal_x,goal_y,dist_to_goal,min_obst_dist,cmd_vx,cmd_wz,replan
-        try:
-            dist_to_goal = math.hypot(self.goal_state.x - self.robot_state.x, self.goal_state.y - self.robot_state.y)
-            mode = diag.get("mode", "unknown")
-            min_obst = diag.get("mf", -1.0)  # min front distance
-            replan = 1 if result.request_replan else 0
-            
-            log_line = (
-                f"{now_sec:.3f},{mode},{self.robot_state.x:.3f},{self.robot_state.y:.3f},{self.robot_state.yaw:.3f},"
-                f"{self.goal_state.x:.3f},{self.goal_state.y:.3f},{dist_to_goal:.3f},{min_obst:.3f},"
-                f"{result.linear_x:.3f},{result.angular_z:.3f},{replan}\n"
-            )
-            with open(self.csv_path, "a") as f:
-                f.write(log_line)
-        except Exception as e:
-            pass # Don't crash on logging
+    def _maybe_log_local_summary(self, now_sec: float, diag: dict, lin: float, ang: float) -> None:
+        if self.last_summary_sec is None:
+            self.last_summary_sec = now_sec
+            return
+        if (now_sec - self.last_summary_sec) < self.summary_interval_sec:
+            return
+        self.last_summary_sec = now_sec
+
+        mode = diag.get("mode", "?")
+        steer = diag.get("steer", "-")
+        dist_goal = diag.get("dist_goal", "-")
+        min_front = diag.get("min_front", "-")
+        ext_stop = diag.get("ext_stop", self.external_stop)
+        zero_reason = diag.get("zero_reason", "-")
+        self.get_logger().info(
+            f"LOCAL step: mode={mode} steer={steer} dist={dist_goal} "
+            f"min_front={min_front} ext_stop={ext_stop} zero_reason={zero_reason} "
+            f"cmd=({lin:.2f},{ang:.2f}) disp={self.path_total_m:.2f}m"
+        )
 
     @staticmethod
     def _yaw_from_quat(x: float, y: float, z: float, w: float) -> float:
@@ -151,4 +168,3 @@ def main(args=None) -> None:
 
 if __name__ == "__main__":
     main()
-

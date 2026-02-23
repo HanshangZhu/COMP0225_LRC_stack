@@ -4,7 +4,8 @@ import os
 from xml.dom import minidom
 
 from ament_index_python.packages import get_package_share_directory
-from launch.actions import TimerAction
+from launch.actions import ExecuteProcess, RegisterEventHandler, TimerAction
+from launch.event_handlers import OnProcessExit
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
@@ -286,18 +287,44 @@ def _set_text(parent, value):
     parent.appendChild(parent.ownerDocument.createTextNode(value))
 
 
+def _get_text(node):
+    return "".join(child.data for child in node.childNodes if child.nodeType == child.TEXT_NODE).strip()
+
+
+def _ensure_ros_argument(ros, key: str, value: str):
+    target = f"{key}:={value}"
+    for argument in _child_elements(ros, "argument"):
+        current = _get_text(argument)
+        if current.startswith(f"{key}:="):
+            _set_text(argument, target)
+            return
+    argument = ros.ownerDocument.createElement("argument")
+    _set_text(argument, target)
+    ros.appendChild(argument)
+
+
 def _rewrite_plugin_remap(remap_text, ns):
     text = remap_text.strip()
-    if text == "odom:=odom/ground_truth":
+    if text in ("odom:=odom/ground_truth", "odom:=/odom/ground_truth"):
         return f"odom:=/{ns}/odom/ground_truth"
-    if text == "~/out:=scan":
+    if text in ("~/out:=scan", "~/out:=/scan"):
         return f"~/out:=/{ns}/scan"
-    if text == "~/out:=/registered_scan":
+    if text in ("~/out:=registered_scan", "~/out:=/registered_scan"):
         return f"~/out:=/{ns}/registered_scan"
+    if text in ("~/out:=data", "~/out:=/data", "~/out:=imu/data", "~/out:=/imu/data"):
+        return f"~/out:=/{ns}/imu/data"
     return text
 
 
-def build_namespaced_robot_description(robot_description, ns, ros_control_param_file):
+def build_namespaced_robot_description(
+    robot_description,
+    ns,
+    ros_control_param_file,
+    ros2_control_plugin_filename: str | None = None,
+    ray_sensor_plugin_filename: str | None = None,
+    imu_sensor_plugin_filename: str | None = None,
+    p3d_plugin_filename: str | None = None,
+):
     doc = minidom.parseString(robot_description)
     _strip_comments(doc)
 
@@ -306,37 +333,64 @@ def build_namespaced_robot_description(robot_description, ns, ros_control_param_
             continue
 
         filename = plugin.getAttribute("filename")
+        if "libgazebo_ros_p3d.so" in filename and p3d_plugin_filename:
+            plugin.setAttribute("filename", p3d_plugin_filename)
+            filename = p3d_plugin_filename
+        elif "libgazebo_ros_imu_sensor.so" in filename and imu_sensor_plugin_filename:
+            plugin.setAttribute("filename", imu_sensor_plugin_filename)
+            filename = imu_sensor_plugin_filename
+        elif "libgazebo_ros_ray_sensor.so" in filename and ray_sensor_plugin_filename:
+            plugin.setAttribute("filename", ray_sensor_plugin_filename)
+            filename = ray_sensor_plugin_filename
         if plugin.hasAttribute("name"):
             original_name = plugin.getAttribute("name")
             if original_name and not original_name.endswith(f"_{ns}"):
                 plugin.setAttribute("name", f"{original_name}_{ns}")
 
+        plugin_name = plugin.getAttribute("name")
+        ros = _get_or_create_child(plugin, "ros")
+        # Avoid gazebo_ros process-global namespace bleed by forcing explicit node
+        # namespace/name ROS args on every Gazebo ROS plugin instance.
+        _set_text(_get_or_create_child(ros, "namespace"), f"/{ns}")
+        if plugin_name:
+            _ensure_ros_argument(ros, "__name", plugin_name)
+        _ensure_ros_argument(ros, "__ns", f"/{ns}")
+
         if "libgazebo_ros2_control.so" in filename:
-            ros = _get_or_create_child(plugin, "ros")
+            # Ensure each ros2_control plugin instance has a deterministic unique
+            # name so Gazebo doesn't key both robots to the same plugin entry.
+            plugin.setAttribute("name", f"gazebo_ros2_control_{ns}")
+            if ros2_control_plugin_filename:
+                plugin.setAttribute("filename", ros2_control_plugin_filename)
+            # Force isolated ROS context inside the plugin itself.
             _set_text(_get_or_create_child(ros, "namespace"), f"/{ns}")
+            _ensure_ros_argument(ros, "__name", f"gazebo_ros2_control_{ns}")
+            # Add a namespaced remap to make the plugin ROS args distinct per robot.
+            remap = _get_or_create_child(ros, "remapping")
+            _set_text(remap, f"~/out:=/{ns}/gazebo_ros2_control/out")
+            _set_text(_get_or_create_child(plugin, "robot_param"), "robot_description")
+            _set_text(_get_or_create_child(plugin, "robot_param_node"), f"/{ns}/robot_state_publisher")
             _set_text(_get_or_create_child(plugin, "robotNamespace"), f"/{ns}")
             _set_text(_get_or_create_child(plugin, "parameters"), ros_control_param_file)
             continue
 
-        ros = _get_or_create_child(plugin, "ros")
-        if "imu_sensor" in filename:
-            _set_text(_get_or_create_child(ros, "namespace"), f"/{ns}/imu")
-
         remaps = list(_child_elements(ros, "remapping"))
         for remap in remaps:
-            current_text = "".join(node.data for node in remap.childNodes if node.nodeType == node.TEXT_NODE)
+            current_text = _get_text(remap)
             new_text = _rewrite_plugin_remap(current_text, ns)
-            if new_text != current_text.strip():
+            if new_text != current_text:
                 _set_text(remap, new_text)
 
-        existing_texts = {
-            "".join(node.data for node in remap.childNodes if node.nodeType == node.TEXT_NODE).strip()
-            for remap in remaps
-        }
+        existing_texts = {_get_text(remap) for remap in remaps}
 
         if "libgazebo_ros_p3d.so" in filename and not any(text.startswith("odom:=") for text in existing_texts):
             remap = doc.createElement("remapping")
             _set_text(remap, f"odom:=/{ns}/odom/ground_truth")
+            ros.appendChild(remap)
+
+        if "libgazebo_ros_imu_sensor.so" in filename and not any(text.startswith("~/out:=") for text in existing_texts):
+            remap = doc.createElement("remapping")
+            _set_text(remap, f"~/out:=/{ns}/imu/data")
             ros.appendChild(remap)
 
         if "libgazebo_ros_ray_sensor.so" in filename:
@@ -364,6 +418,11 @@ def build_dual_robot_stack(
     gait_config,
     ekf_base_to_footprint,
     ekf_footprint_to_odom,
+    joint_state_spawner_delay_sec=5.0,
+    effort_spawner_delay_sec=5.2,
+    standup_delay_sec=9.0,
+    pose_guard_hold_sec=8.5,
+    activate_controllers_on_spawn=True,
 ):
     tf_remaps = [("/tf", f"/{ns}/tf"), ("/tf_static", f"/{ns}/tf_static")]
 
@@ -382,6 +441,10 @@ def build_dual_robot_stack(
         output="screen",
     )
 
+    joint_state_controller_name = f"{ns}_joint_states_controller"
+    effort_controller_name = f"{ns}_joint_group_effort_controller"
+    effort_topic = f"/{ns}/{effort_controller_name}/joint_trajectory"
+
     quadruped_controller_node = Node(
         package="champ_base",
         executable="quadruped_controller_node",
@@ -392,7 +455,7 @@ def build_dual_robot_stack(
             {"publish_joint_states": True},
             {"publish_joint_control": True},
             {"publish_foot_contacts": False},
-            {"joint_controller_topic": "joint_group_effort_controller/joint_trajectory"},
+            {"joint_controller_topic": effort_topic},
             {"urdf": ParameterValue(robot_description, value_type=str)},
             joints_config,
             links_config,
@@ -447,54 +510,81 @@ def build_dual_robot_stack(
     )
 
     spawn_entity_node = Node(
-        package="gazebo_ros",
-        executable="spawn_entity.py",
+        package="go2_gazebo_sim",
+        executable="spawn_entity_direct.py",
         output="screen",
         arguments=[
-            "-entity",
+            "--entity",
             ns,
-            "-topic",
+            "--topic",
             f"/{ns}/robot_description",
-            "-robot_namespace",
-            f"/{ns}",
-            "-x",
+            "--x",
             spawn_x,
-            "-y",
+            "--y",
             spawn_y,
-            "-z",
+            "--z",
             "0.45",
-            "-R",
+            "--roll",
             "0",
-            "-P",
+            "--pitch",
             "0",
-            "-Y",
+            "--yaw",
             spawn_yaw,
         ],
     )
 
+    initial_pose_guard_node = Node(
+        package="go2_gazebo_sim",
+        executable="initial_pose_guard.py",
+        name=f"{ns}_initial_pose_guard",
+        parameters=[
+            {"use_sim_time": use_sim_time},
+            {"entity_name": ns},
+            {"spawn_x": spawn_x},
+            {"spawn_y": spawn_y},
+            {"spawn_z": 0.45},
+            {"spawn_yaw": spawn_yaw},
+            {"hold_sec": pose_guard_hold_sec},
+            {"rate": 15.0},
+            {"request_timeout_sec": 0.8},
+            {"max_failures": 200},
+            {"retry_backoff_initial_sec": 0.1},
+            {"retry_backoff_max_sec": 1.5},
+        ],
+        output="screen",
+    )
+
+    joint_state_spawner_args = [
+        joint_state_controller_name,
+        "--controller-manager",
+        f"/{ns}/controller_manager",
+        "--controller-manager-timeout",
+        "60",
+    ]
+    effort_spawner_args = [
+        effort_controller_name,
+        "--controller-manager",
+        f"/{ns}/controller_manager",
+        "--controller-manager-timeout",
+        "60",
+    ]
+    if not activate_controllers_on_spawn:
+        joint_state_spawner_args.append("--inactive")
+        effort_spawner_args.append("--inactive")
+
     load_joint_state_controller = Node(
         package="controller_manager",
         executable="spawner",
-        arguments=[
-            "joint_states_controller",
-            "--controller-manager",
-            f"/{ns}/controller_manager",
-            "--controller-manager-timeout",
-            "60",
-        ],
+        parameters=[{"use_sim_time": use_sim_time}],
+        arguments=joint_state_spawner_args,
         output="screen",
     )
 
     load_joint_effort_controller = Node(
         package="controller_manager",
         executable="spawner",
-        arguments=[
-            "joint_group_effort_controller",
-            "--controller-manager",
-            f"/{ns}/controller_manager",
-            "--controller-manager-timeout",
-            "60",
-        ],
+        parameters=[{"use_sim_time": use_sim_time}],
+        arguments=effort_spawner_args,
         output="screen",
     )
 
@@ -510,8 +600,27 @@ def build_dual_robot_stack(
         package="go2_gazebo_sim",
         executable="stand_up_slowly.py",
         namespace=ns,
-        remappings=[
-            ("/joint_group_effort_controller/joint_trajectory", f"/{ns}/joint_group_effort_controller/joint_trajectory")
+        parameters=[
+            {"use_sim_time": use_sim_time},
+            {"controller_wait_sec": 4.0},
+            {"phase1_sec": 6.0},
+            {"phase2_sec": 12.0},
+            {"phase3_sec": 18.0},
+            {"knee_bend_ratio": 0.80},
+            {"joint_controller_topic": effort_topic},
+        ],
+        output="screen",
+    )
+
+    wait_joint_states_ready = ExecuteProcess(
+        cmd=[
+            "bash",
+            "-lc",
+            (
+                f"until ros2 topic echo /{ns}/joint_states --once >/dev/null 2>&1; do "
+                "sleep 0.25; "
+                "done"
+            ),
         ],
         output="screen",
     )
@@ -523,7 +632,15 @@ def build_dual_robot_stack(
         base_to_footprint_ekf,
         footprint_to_odom_ekf,
         spawn_entity_node,
-        TimerAction(period=6.0, actions=[load_joint_state_controller, load_joint_effort_controller]),
+        TimerAction(period=0.6, actions=[initial_pose_guard_node]),
+        TimerAction(period=joint_state_spawner_delay_sec, actions=[load_joint_state_controller]),
+        TimerAction(period=effort_spawner_delay_sec, actions=[load_joint_effort_controller]),
         contact_sensor,
-        TimerAction(period=10.0, actions=[stand_up_node]),
+        TimerAction(period=standup_delay_sec, actions=[wait_joint_states_ready]),
+        RegisterEventHandler(
+            OnProcessExit(
+                target_action=wait_joint_states_ready,
+                on_exit=[stand_up_node],
+            )
+        ),
     ]

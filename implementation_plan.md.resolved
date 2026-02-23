@@ -1,0 +1,240 @@
+# Isaac Stack Refactoring Plan
+
+The goal is to reduce complexity and line-count by **~35–45 %** while making **zero changes** to:
+- physics / collision logic ([_circle_hits_box](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_bringup.py#145-152), [_ray_box_intersection_2d](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_bringup.py#110-143), wall parsing)
+- OmniGraph wiring ([_build_rtx_lidar_graph](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_bringup.py#745-788), [_create_ros2_base_graph](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_dual_bringup.py#373-479), [_create_ros_global_graph](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_dual_bringup.py#480-503))
+- autonomy algorithm logic ([simple_frontier_explorer.py](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/simple_frontier_explorer.py), [simple_scan_mapper.py](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/simple_scan_mapper.py))
+- all launch file *arguments* and *topic wires* (ROS namespace, topic names, remapping, timers)
+- the public API that [isaac_t_world_dual_bringup.py](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_dual_bringup.py) imports from `isaac_t_world_bringup`
+
+---
+
+## Summary of Issues Found
+
+| File | Lines | Key problems |
+|---|---|---|
+| [isaac_t_world_bringup.py](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_bringup.py) | 1337 | [IsaacKinematicBridge](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_bringup.py#989-1155) class defined *inside* [main()](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_bringup.py#911-1333); two copy-pasted [_import_go2_usd_to_stage](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_bringup.py#356-382) functions; [_make_arg_parser](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_dual_bringup.py#143-228) defines 28 args in one monolithic block |
+| [isaac_t_world_dual_bringup.py](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_dual_bringup.py) | 792 | [_import_go2_to_stage_dual](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_dual_bringup.py#237-369) is a near-copy of the single version; [RobotRuntime](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_dual_bringup.py#24-52) duplicates fields already in single's bridge class; arg parser repeats ~22 identical flags |
+| [_stack_components.py](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/launch/_stack_components.py) | 252 | Every `build_*_node` function has the same 10-line `kwargs/optional-ns/optional-remappings/optional-condition` boilerplate — 8 functions, all structurally identical |
+| Both launch files | 520 + 713 | [_robot_autonomy_actions](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/launch/two_go2_isaac_coordinated_autonomy.launch.py#35-338) in the dual launch (337 lines) is a helper that could be 60 % shorter |
+
+---
+
+## Proposed Changes
+
+---
+
+### 1. Extract [IsaacKinematicBridge](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_bringup.py#989-1155) out of [main()](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_bringup.py#911-1333)
+
+The most impactful single change. Currently the class is defined *inside* [main()](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_bringup.py#911-1333) purely to capture `args` and `walls` through closure. This makes the class untestable and hidden.
+
+#### [MODIFY] [isaac_t_world_bringup.py](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_bringup.py)
+
+Move [IsaacKinematicBridge](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_bringup.py#989-1155) to module scope (lines 989–1154). Replace closure captures with explicit constructor parameters:
+
+```diff
+-class IsaacKinematicBridge(Node):   # defined inside main()
++class IsaacKinematicBridge(Node):   # module-level
+     def __init__(self,
++                 namespace: str,
++                 walls: list[WallBox],
++                 args,              # or unpack into typed fields
+     ):
+         ...
+-        self.cmd_linear = float(max(-args.max_linear_speed, ...))  # closure
++        self.cmd_linear = float(max(-self._max_linear, ...))       # self field
+```
+
+**Impact**: ~165 lines of class code become testable at the module level. [main()](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_bringup.py#911-1333) shrinks from ~420 lines to ~260.
+
+**What does NOT change**: all ROS topic names, publish logic, collision guards, physics step math.
+
+---
+
+### 2. Merge duplicate [_import_go2_usd_to_stage](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_bringup.py#356-382) functions
+
+[isaac_t_world_bringup.py](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_bringup.py) lines 338–381 defines [_import_go2_usd_to_stage](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_bringup.py#356-382) **twice** — both definitions have the same signature and neither is called before the second one overwrites the first. The first version uses `pxr` references directly; the second uses the `omni.kit.commands.CreateReferenceCommand` path.
+
+#### [MODIFY] [isaac_t_world_bringup.py](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_bringup.py)
+
+Delete lines 338–354 (the first, dead definition). Keep only the second definition (lines 356–381). Net reduction: **~17 lines**.
+
+**Risk**: None — Python uses only the last definition of a duplicate name anyway.
+
+---
+
+### 3. Consolidate duplicate URDF import function in dual bringup
+
+[_import_go2_to_stage_dual](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_dual_bringup.py#237-369) (dual bringup, lines 237–368, ~132 lines) is functionally a superset of [_import_go2_to_stage](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_bringup.py#384-465) (single bringup, lines 384–464, ~81 lines). The dual version adds `before_children` / `after_children` diff logic to resolve which prim was newly created.
+
+#### [MODIFY] [isaac_t_world_bringup.py](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_bringup.py)
+
+Add an optional `snapshot_before: bool = False` parameter to [_import_go2_to_stage](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_bringup.py#384-465) that enables the before/after child-set diffing when `True` (needed by dual mode to disambiguate two robots on repeat calls).
+
+#### [MODIFY] [isaac_t_world_dual_bringup.py](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_dual_bringup.py)
+
+Replace [_import_go2_to_stage_dual(...)](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_dual_bringup.py#237-369) call with `single._import_go2_to_stage(..., snapshot_before=True)`. Delete the now-redundant [_import_go2_to_stage_dual](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_dual_bringup.py#237-369) function body. Net reduction: **~100 lines from dual bringup**.
+
+---
+
+### 4. Refactor [_stack_components.py](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/launch/_stack_components.py) builder boilerplate
+
+All 8 `build_*_node` functions share the identical pattern:
+```python
+def build_X_node(ns, use_sim_time, extra_params=None, remappings=None, condition=None, name="..."):
+    params = [<config>, {"use_sim_time": use_sim_time}]
+    if extra_params: params.append(extra_params)
+    kwargs = {"package": "...", "executable": "...", "name": name, "parameters": params, "output": "screen"}
+    if ns: kwargs["namespace"] = ns
+    if remappings: kwargs["remappings"] = remappings
+    if condition is not None: kwargs["condition"] = condition
+    return Node(**kwargs)
+```
+
+#### [MODIFY] [_stack_components.py](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/launch/_stack_components.py)
+
+Add a single private `_make_node()` helper and rewrite each `build_*` as a 4-6 line thin wrapper:
+
+```python
+def _make_node(pkg, exe, ns, use_sim_time, name, extra_base_params=None,
+               extra_params=None, remappings=None, condition=None):
+    base = extra_base_params or {}
+    params = [{**base, "use_sim_time": use_sim_time}]
+    if extra_params:
+        params.append(extra_params)
+    kwargs = dict(package=pkg, executable=exe, name=name,
+                  parameters=params, output="screen")
+    if ns:         kwargs["namespace"] = ns
+    if remappings: kwargs["remappings"] = remappings
+    if condition is not None: kwargs["condition"] = condition
+    return Node(**kwargs)
+
+def build_rviz_node(rviz_file, use_sim_time, condition=None, namespace=None,
+                    remappings=None, name="rviz2"):
+    return _make_node("rviz2", "rviz2", namespace, use_sim_time, name,
+                      extra_base_params={},   # rviz passes -d via arguments, not params
+                      condition=condition, remappings=remappings)
+    # Note: rviz2 takes `arguments` not `parameters` — keep as one-off or pass through kwargs
+```
+
+> [!NOTE]
+> [build_rviz_node](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/launch/_stack_components.py#13-36) passes `arguments=["-d", rviz_file]` rather than parameters, so it stays a direct `Node(...)` call. All other 7 builders become thin wrappers. Net reduction: **~120 lines → ~50 lines** in [_stack_components.py](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/launch/_stack_components.py).
+
+---
+
+### 5. Consolidate arg parsers between single and dual bringup
+
+[_make_arg_parser()](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_dual_bringup.py#143-228) in single bringup (241 lines) and dual bringup (227 lines) share ~22 identical `add_argument` calls. The dual version adds `--robots-config`, `--robot-a-*`, `--robot-b-*`, and `--physics-device`.
+
+#### Strategy: Shared base parser
+
+```python
+# in isaac_t_world_bringup.py (already imported by dual)
+def _make_base_arg_parser() -> argparse.ArgumentParser:
+    """Common args shared by single and dual bringup."""
+    p = argparse.ArgumentParser(add_help=False)
+    p.add_argument("--world-file", required=True, ...)
+    p.add_argument("--robot-urdf", ...)
+    ...  # ~20 shared args
+    return p
+
+def _make_arg_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(parents=[_make_base_arg_parser()], ...)
+    p.add_argument("--ros-namespace", ...)
+    p.add_argument("--spawn-x", ...)
+    ...  # ~6 single-only args
+    return p
+```
+
+#### [MODIFY] [isaac_t_world_dual_bringup.py](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_dual_bringup.py)
+
+```python
+def _make_arg_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(parents=[single._make_base_arg_parser()], ...)
+    p.add_argument("--robots-config", ...)
+    p.add_argument("--robot-a-namespace", ...)
+    ...  # ~8 dual-only args
+    return p
+```
+
+Net reduction: **~180 lines total** between the two files.
+
+---
+
+### 6. Simplify [_robot_autonomy_actions](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/launch/two_go2_isaac_coordinated_autonomy.launch.py#35-338) in the dual launch file
+
+[_robot_autonomy_actions](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/launch/two_go2_isaac_coordinated_autonomy.launch.py#35-338) in [two_go2_isaac_coordinated_autonomy.launch.py](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/launch/two_go2_isaac_coordinated_autonomy.launch.py) (lines 35–337, ~300 lines) builds the per-robot autonomy stack. It is mostly a long list of `if use_fast_lio ... else ...` blocks and node constructions, with many intermediate `LaunchConfiguration` objects repeated verbatim.
+
+#### [MODIFY] [two_go2_isaac_coordinated_autonomy.launch.py](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/launch/two_go2_isaac_coordinated_autonomy.launch.py)
+
+- Extract a `_slam_actions(ns, cfg, use_fast_lio, use_sim_time)` helper (~30 lines) for the SLAM branch logic.
+- Use a list comprehension to build both robot autonomy blocks instead of repeating the same construction for `ROBOT_A_NS` and `ROBOT_B_NS`.
+- No algorithm parameters change, only structural Python refactoring.
+
+Net reduction: **~100 lines** in the dual launch file.
+
+---
+
+## Summary Table
+
+| Change | File(s) | Lines Saved | Risk |
+|---|---|---|---|
+| Extract [IsaacKinematicBridge](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_bringup.py#989-1155) from [main()](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_bringup.py#911-1333) | [isaac_t_world_bringup.py](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_bringup.py) | ~30 (structural only) | Low |
+| Remove duplicate [_import_go2_usd_to_stage](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_bringup.py#356-382) | [isaac_t_world_bringup.py](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_bringup.py) | ~17 | None |
+| Merge dual URDF import into single | [bringup.py](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_bringup.py) + [dual_bringup.py](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_dual_bringup.py) | ~100 | Low |
+| Refactor [_stack_components.py](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/launch/_stack_components.py) builder boilerplate | [_stack_components.py](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/launch/_stack_components.py) | ~70 | Low |
+| Shared base arg parser | [bringup.py](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_bringup.py) + [dual_bringup.py](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_dual_bringup.py) | ~180 | Low |
+| Simplify [_robot_autonomy_actions](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/launch/two_go2_isaac_coordinated_autonomy.launch.py#35-338) | `two_go2_...launch.py` | ~100 | Low |
+| **Total** | | **~500 lines (~35%)** | Low |
+
+---
+
+## User Review Required
+
+> [!IMPORTANT]
+> **Change 3 (merging URDF import)** adds a `snapshot_before` boolean to the shared function. Before/after child diffing is needed when two URDF imports happen sequentially in the *same* stage (dual mode). If you ever want to support 3+ robots in one stage, this same mechanism scales correctly. Confirm you are comfortable adding this parameter to the shared function.
+
+> [!WARNING]
+> **Change 5 (arg parser refactor)** moves `_make_base_arg_parser` to [isaac_t_world_bringup.py](file:///home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts/isaac_t_world_bringup.py), which is imported by the dual script. This creates a legitimate module dependency but does **not** change any CLI interface visible to the launch files (same flags, same defaults).
+
+---
+
+## Verification Plan
+
+Since there are no automated tests in the package, verification will be done by:
+
+### Automated (dry-run) checks
+```bash
+# 1. Verify the single bringup module is importable and arg parser still works
+cd /home/hz/cmu_exploration_ws/src/go2_issac_stack/scripts
+python3 -c "
+import sys; sys.modules['isaacsim'] = type(sys)('isaacsim')
+import importlib, types
+# mock isaacsim
+import unittest.mock as m
+with m.patch.dict('sys.modules', {'isaacsim': m.MagicMock(), 'isaacsim.SimulationApp': m.MagicMock()}):
+    import importlib.util, pathlib
+    spec = importlib.util.spec_from_file_location('bringup', 'isaac_t_world_bringup.py')
+    mod = importlib.util.module_from_spec(spec)
+    # just test arg parser construction doesn't crash
+    print('OK - module structure valid')
+"
+```
+
+### Manual verification after each change
+After each of the 6 changes:
+1. **Single launch** — run a dry-run (headless, `--help`):
+   ```bash
+   cd /home/hz/cmu_exploration_ws
+   source install/setup.bash
+   ros2 launch go2_issac_stack single_go2_t_world_frontier.launch.py --show-args
+   ```
+2. **Dual launch** — run a dry-run:
+   ```bash
+   ros2 launch go2_issac_stack two_go2_isaac_coordinated_autonomy.launch.py --show-args
+   ```
+3. **Full simulation test** (only after all changes) — run the existing shell script:
+   ```bash
+   bash /home/hz/cmu_exploration_ws/run_exploration_issac.sh
+   ```
+   Confirm: Isaac Sim loads, both robots spawn, `/go2_1/odom` and `/go2_2/odom` appear in `ros2 topic list`.

@@ -41,6 +41,7 @@ class NavRuntimeState:
     blocked_since_sec: Optional[float] = None
     blocked_anchor_xy: Optional[tuple[float, float]] = None
     last_recovery_replan_time_sec: Optional[float] = None
+    last_goal_reached_replan_time_sec: Optional[float] = None
 
     escape_target_world: Optional[tuple[float, float]] = None
     escape_target_until_sec: Optional[float] = None

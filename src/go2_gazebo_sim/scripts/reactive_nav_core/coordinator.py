@@ -67,20 +67,53 @@ class ReactiveNavCoordinator:
         if runtime_state.start_time_sec is None:
             runtime_state.start_time_sec = now_sec
         if (now_sec - runtime_state.start_time_sec) < self.cfg.startup_delay:
-            return TickResult(0.0, 0.0, events=events, diagnostics={"mode": "startup"})
+            return TickResult(
+                0.0,
+                0.0,
+                events=events,
+                diagnostics={"mode": "startup", "ext_stop": external_stop},
+            )
 
         if self.cfg.require_settle_before_motion and not runtime_state.settle_ready:
             if robot_state.speed > self.cfg.settle_speed_threshold:
                 runtime_state.settle_start_time_sec = None
-                return TickResult(0.0, 0.0, events=events, diagnostics={"mode": "settling"})
+                return TickResult(
+                    0.0,
+                    0.0,
+                    events=events,
+                    diagnostics={
+                        "mode": "settling",
+                        "speed": round(robot_state.speed, 3),
+                        "ext_stop": external_stop,
+                    },
+                )
 
             if runtime_state.settle_start_time_sec is None:
                 runtime_state.settle_start_time_sec = now_sec
-                return TickResult(0.0, 0.0, events=events, diagnostics={"mode": "settling"})
+                return TickResult(
+                    0.0,
+                    0.0,
+                    events=events,
+                    diagnostics={
+                        "mode": "settling",
+                        "speed": round(robot_state.speed, 3),
+                        "ext_stop": external_stop,
+                    },
+                )
 
             settle_elapsed = now_sec - runtime_state.settle_start_time_sec
             if settle_elapsed < self.cfg.settle_hold_sec:
-                return TickResult(0.0, 0.0, events=events, diagnostics={"mode": "settling"})
+                return TickResult(
+                    0.0,
+                    0.0,
+                    events=events,
+                    diagnostics={
+                        "mode": "settling",
+                        "speed": round(robot_state.speed, 3),
+                        "settle_elapsed": round(settle_elapsed, 2),
+                        "ext_stop": external_stop,
+                    },
+                )
 
             runtime_state.settle_ready = True
             events.append(
@@ -92,20 +125,43 @@ class ReactiveNavCoordinator:
             )
 
         if goal_state.x is None or goal_state.y is None:
-            return TickResult(0.0, 0.0, events=events, diagnostics={"mode": "no_goal"})
+            return TickResult(
+                0.0,
+                0.0,
+                events=events,
+                diagnostics={"mode": "no_goal", "ext_stop": external_stop},
+            )
 
         if scan is None:
-            return TickResult(0.0, 0.0, events=events, diagnostics={"mode": "no_scan"})
+            return TickResult(
+                0.0,
+                0.0,
+                events=events,
+                diagnostics={
+                    "mode": "no_scan",
+                    "goal": [round(goal_state.x, 2), round(goal_state.y, 2)],
+                    "ext_stop": external_stop,
+                },
+            )
 
         goal_dx_world = goal_state.x - robot_state.x
         goal_dy_world = goal_state.y - robot_state.y
         dist_to_goal = math.hypot(goal_dx_world, goal_dy_world)
         if dist_to_goal < self.cfg.goal_tolerance:
+            request_replan = False
+            last_replan = runtime_state.last_goal_reached_replan_time_sec
+            if (
+                last_replan is None
+                or (now_sec - last_replan) >= self.cfg.goal_reached_replan_cooldown_sec
+            ):
+                request_replan = True
+                runtime_state.last_goal_reached_replan_time_sec = now_sec
             return TickResult(0.0, 0.0, events=events, diagnostics={
                 "mode": "goal_reached",
                 "goal": [round(goal_state.x, 2), round(goal_state.y, 2)],
                 "dist_goal": round(dist_to_goal, 2),
-            })
+                "ext_stop": external_stop,
+            }, request_replan=request_replan)
 
         goal_angle = math.atan2(goal_dy_world, goal_dx_world)
         heading_err_goal = wrap_angle(goal_angle - robot_state.yaw)
@@ -252,6 +308,20 @@ class ReactiveNavCoordinator:
             scan_metrics.right_push,
             external_stop,
         )
+        blocked_front = scan_metrics.min_front < self.cfg.obstacle_stop_dist
+        hard_stop = external_stop != 0
+        zero_reason = None
+        if hard_stop:
+            zero_reason = "external_stop"
+        elif abs(lin) < 1e-6 and abs(ang) < 1e-6:
+            if blocked_front:
+                zero_reason = "blocked_front_zero_turn"
+            else:
+                heading_factor = max(0.0, math.cos(heading_err))
+                if heading_factor <= 1e-3:
+                    zero_reason = "heading_factor_near_zero"
+                else:
+                    zero_reason = "controller_zero"
 
         has_plan = len(runtime_state.plan_waypoints_world) > 0
         plan_wps = len(runtime_state.plan_waypoints_world)
@@ -272,6 +342,11 @@ class ReactiveNavCoordinator:
             "plan_wps": plan_wps,
             "escape": escape,
             "ext_stop": external_stop,
+            "blocked_front": blocked_front,
+            "hard_stop": hard_stop,
+            "heading_err_deg": round(math.degrees(heading_err), 1),
+            "heading_err_goal_deg": round(math.degrees(heading_err_goal), 1),
+            "zero_reason": zero_reason,
         }
 
         return TickResult(
