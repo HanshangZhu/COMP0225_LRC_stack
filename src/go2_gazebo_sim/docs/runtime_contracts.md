@@ -1,54 +1,49 @@
 # Runtime Contracts (go2_gazebo_sim)
 
-This document defines ownership boundaries between frontier generation, recovery, and local motion control.
+## Ownership Table
 
-## Node Responsibilities
-
-- `geometric_frontier.py`
-  - Owns frontier extraction from occupancy evidence.
-  - Publishes frontier goal candidates to `frontier_goal_topic` (default `/way_point`).
-  - Publishes visualization markers.
-  - Does not command velocity directly.
-
-- `frontier_recovery.py`
-  - Owns event-driven fallback goal selection when `/stop` remains asserted.
-  - Publishes fallback goals to `/goal_point`.
-  - Does not publish velocity commands.
-
-- `goalpoint_to_waypoint.py`
-  - Bridges `/goal_point` -> `/way_point`.
-  - Ensures recovery goals enter the same motion pipeline as frontier goals.
-
-- `reactive_nav.py` + `reactive_nav_core/*`
-  - Owns local motion command synthesis.
-  - Subscribes to `/way_point`, `/scan`, and odometry.
-  - Publishes `/cmd_vel_stamped` and optional `/frontier_replan` trigger.
-
-- `wall_collision_checker.py`
-  - Owns near-field safety stop assertion using front-sector laser constraints.
-  - Publishes binary stop signal on `/stop`.
+- `go2_gazebo_sim` owns runtime domains:
+  - `scripts/assets/*`: spawn, pose-guard, stand-up, drift checks.
+  - `scripts/perception/*`: simulator transport and SIMDATA->PointCloud2 normalization helpers.
+  - `scripts/slam/*`: odometry relay/normalization.
+  - `scripts/control/*`: local navigation and safety control.
+  - `scripts/observability/*`: status + RViz observability tools.
+- `go2_nav_algorithms` owns high-level nav algorithms:
+  - PointCloud2->LaserScan projection, mapper, frontier, goal assignment.
+- `mtare_ros2` owns M-TARE global coordinator behavior.
 
 ## Topic Ownership Rules
 
-- Goal source of truth for navigation: `/way_point`.
-- Velocity source of truth: `/cmd_vel_stamped` from `reactive_nav.py`.
-- Safety stop source of truth: `/stop` from `wall_collision_checker.py`.
-- Frontier replan trigger source: `/frontier_replan` from `reactive_nav.py`.
+- Goals into local controller:
+  - autonomy profile: `/<ns>/way_point`
+  - coordinated/M-TARE profiles: `/<ns>/way_point_coord`
+- Frontier candidate output: `/<ns>/way_point_raw` (when frontier is enabled).
+- Planner scan output: `/<ns>/scan_3d` (published by planner-owned pointcloud projection).
+- Local map output: `/<ns>/map` (published by `go2_nav_algorithms/simple_scan_mapper_cpp`).
+- Navigation odometry input: `/<ns>/odom/nav` (published by `go2_gazebo_sim/scripts/slam/slam_odom_relay.py`).
+- Velocity source of truth: `/<ns>/cmd_vel_stamped` from `go2_gazebo_sim/scripts/control/reactive_nav.py`.
+- M-TARE marker source: `/<ns>/mtare_goal_marker` from `mtare_ros2/mtare_coordinator.py`.
 
-## Sequencing Expectations
+## `tare_ros2_exact` Backend Notes
 
-1. Bridge nodes and scan producers start first.
-2. Frontier + safety + monitor start next.
-3. `autonomy_enabler.py` and `reactive_nav.py` start after startup delay.
-4. `reactive_nav.py` waits for settle gate before motion.
+- `planner_backend:=tare_ros2_exact` is opt-in and non-default.
+- Coordinator publishes split outputs:
+  - `/<ns>/way_point_tare`
+  - `/<ns>/goal_point`
+- FAR planner publishes `/<ns>/way_point_far`.
+- `mtare_behavior_executive_cpp` is the sole planner-side publisher of `/<ns>/way_point_coord`.
+- Shared graph bus topics:
+  - `/mtare/robot_vgraph`
+  - `/mtare/decoded_vgraph`
+- Launch preflight checks `graph_decoder` + `visibility_graph_msg` unless `require_shared_graph:=false`.
 
-## Debug Checklist
+## Compatibility Window
 
-- If robot spins in place:
-  - verify `/stop` toggling and `wall_collision_checker` thresholds.
-  - verify `/way_point` receives updates from frontier or recovery.
-- If frontiers exist but no movement:
-  - verify `autonomy_enabler.py` has enabled `/joy`.
-  - verify `reactive_nav.py` publishes non-zero `/cmd_vel_stamped`.
-- If goals oscillate:
-  - inspect hysteresis/reselect values in geometric frontier YAML profiles.
+- Legacy top-level script paths in `go2_gazebo_sim/scripts/*.py` are wrappers for one release cycle.
+- Planned removal target: next minor release after this refactor cut.
+- Canonical launch is `go2_gazebo_sim/launch/dual_go2_modular.launch.py`.
+- Legacy launch names remain as wrappers:
+  - `two_go2_t_world_autonomy.launch.py`
+  - `two_go2_t_world_coordinated_autonomy.launch.py`
+  - `two_go2_t_world_mtare_ros2.launch.py`
+  - `test_pointlio.launch.py`

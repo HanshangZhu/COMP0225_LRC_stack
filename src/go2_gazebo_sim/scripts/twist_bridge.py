@@ -1,50 +1,38 @@
 #!/usr/bin/env python3
+"""Compatibility wrapper.
+
+Deprecated path kept for one release cycle.
 """
-Bridge node to convert TwistStamped to Twist for the quadruped controller.
-The CMU autonomy stack's pathFollower publishes TwistStamped,
-but the Champ quadruped controller expects Twist.
-"""
-import rclpy
-from rclpy.node import Node
-from geometry_msgs.msg import Twist, TwistStamped
 
-class TwistBridge(Node):
-    def __init__(self):
-        super().__init__('twist_bridge')
-        
-        # Subscribe to TwistStamped from pathFollower
-        self.sub = self.create_subscription(
-            TwistStamped,
-            '/cmd_vel_stamped',
-            self.twist_callback,
-            10
-        )
-        
-        # Publish Twist to the topic the controller expects.
-        # Gazebo controller subscribes to /cmd_vel.
-        self.pub = self.create_publisher(
-            Twist,
-            '/cmd_vel',
-            10
-        )
-        
-        self.get_logger().info('Twist Bridge started: /cmd_vel_stamped -> /cmd_vel')
-        
-    def twist_callback(self, msg: TwistStamped):
-        twist = Twist()
-        twist.linear = msg.twist.linear
-        twist.angular = msg.twist.angular
-        self.pub.publish(twist)
+import os
+import runpy
+import sys
 
-def main(args=None):
-    rclpy.init(args=args)
-    node = TwistBridge()
-    try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
-    node.destroy_node()
-    rclpy.shutdown()
 
-if __name__ == '__main__':
+_REL_IMPL = "perception/twist_bridge.py"
+
+
+def _resolve_impl() -> str:
+    here = os.path.dirname(__file__)
+    candidates = [
+        os.path.normpath(os.path.join(here, _REL_IMPL)),
+        os.path.normpath(os.path.join(here, "scripts", _REL_IMPL)),
+    ]
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    raise FileNotFoundError(f"Could not resolve implementation for {__file__}: tried {candidates}")
+
+
+def main() -> None:
+    impl = _resolve_impl()
+    print(
+        "[DEPRECATED] go2_gazebo_sim/twist_bridge.py -> go2_gazebo_sim/scripts/perception/twist_bridge.py",
+        file=sys.stderr,
+    )
+    sys.path.insert(0, os.path.dirname(impl))
+    runpy.run_path(impl, run_name="__main__")
+
+
+if __name__ == "__main__":
     main()
