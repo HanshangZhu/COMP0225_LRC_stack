@@ -1,4 +1,5 @@
 import sys
+from pathlib import Path
 import rclpy
 from isaacsim import SimulationApp
 
@@ -30,10 +31,11 @@ import_config.make_default_prim = False
 import_config.create_physics_scene = False
 import_config.import_inertia_tensor = True
 
-urdf_path = "/home/hz/cmu_exploration_ws/install/go2_description/share/go2_description/urdf/go2_description.urdf"
+workspace_root = Path(__file__).resolve().parents[3]
+urdf_path = workspace_root / "install/go2_description/share/go2_description/urdf/go2_description.urdf"
 ok, imported_path = omni.kit.commands.execute(
     "URDFParseAndImportFile",
-    urdf_path=urdf_path,
+    urdf_path=str(urdf_path),
     import_config=import_config,
     get_articulation_root=True,
 )

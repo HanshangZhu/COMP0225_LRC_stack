@@ -15,6 +15,7 @@ GUI="${GUI:-true}"
 RVIZ="${RVIZ:-false}"
 CLEANUP_STALE="${CLEANUP_STALE:-true}"
 CMU_ENV_NAME="${CMU_ENV_NAME:-cmu_env}"
+ROS2_SETUP_BASH="${ROS2_SETUP_BASH:-/opt/ros/humble/setup.bash}"
 
 LAUNCH_PKG="go2_gazebo_sim"
 LAUNCH_FILE="two_go2_t_world_coordinated_autonomy.launch.py"
@@ -170,9 +171,10 @@ echo "GUI=${GUI} RVIZ=${RVIZ} CLEANUP_STALE=${CLEANUP_STALE}"
 echo "CMU_ENV_NAME=${CMU_ENV_NAME}"
 
 # Force execution on the CMU conda env.
-if [[ -f "/home/hz/miniforge3/etc/profile.d/conda.sh" ]]; then
+CONDA_SH_PATH="${CONDA_SH_PATH:-${HOME}/miniforge3/etc/profile.d/conda.sh}"
+if [[ -f "${CONDA_SH_PATH}" ]]; then
   # shellcheck disable=SC1091
-  source "/home/hz/miniforge3/etc/profile.d/conda.sh"
+  source "${CONDA_SH_PATH}"
   if conda env list | awk '{print $1}' | grep -Fxq "${CMU_ENV_NAME}"; then
     conda activate "${CMU_ENV_NAME}"
   else
@@ -180,7 +182,7 @@ if [[ -f "/home/hz/miniforge3/etc/profile.d/conda.sh" ]]; then
     exit 1
   fi
 else
-  echo "[FATAL] conda.sh not found at /home/hz/miniforge3/etc/profile.d/conda.sh"
+  echo "[FATAL] conda.sh not found at ${CONDA_SH_PATH}"
   exit 1
 fi
 
@@ -190,8 +192,8 @@ if [[ "${CONDA_DEFAULT_ENV:-}" != "${CMU_ENV_NAME}" ]]; then
   exit 1
 fi
 
-if ! safe_source "/opt/ros/humble/setup.bash"; then
-  echo "[FATAL] Cannot source /opt/ros/humble/setup.bash"
+if ! safe_source "${ROS2_SETUP_BASH}"; then
+  echo "[FATAL] Cannot source ${ROS2_SETUP_BASH}"
   exit 1
 fi
 

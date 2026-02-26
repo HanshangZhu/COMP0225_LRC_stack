@@ -1,15 +1,45 @@
 #!/usr/bin/env bash
 set -eo pipefail
 
+WS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROS2_SETUP_BASH="${ROS2_SETUP_BASH:-/opt/ros/humble/setup.bash}"
 PROFILE="${1:-autonomy_baseline}"
 
-source /home/hz/miniforge3/etc/profile.d/conda.sh
-conda activate cmu_env
+safe_source() {
+  local had_u=0
+  if [[ $- == *u* ]]; then
+    had_u=1
+    set +u
+  fi
+  # shellcheck disable=SC1090
+  source "$1"
+  local rc=$?
+  if [[ ${had_u} -eq 1 ]]; then
+    set -u
+  fi
+  return ${rc}
+}
 
-cd /home/hz/cmu_exploration_ws
-source install/setup.bash
+if [[ -f "${HOME}/miniforge3/etc/profile.d/conda.sh" ]]; then
+  safe_source "${HOME}/miniforge3/etc/profile.d/conda.sh"
+  conda activate cmu_env
+elif command -v micromamba >/dev/null 2>&1; then
+  eval "$(micromamba shell hook -s bash)"
+  micromamba activate cmu_env
+else
+  echo "Could not find conda/micromamba activation script for cmu_env." >&2
+  exit 1
+fi
 
-USD_PATH="/home/hz/cmu_exploration_ws/src/go2_issac_stack/assets/unitree_model/Go2/usd/go2.usd"
+safe_source "${ROS2_SETUP_BASH}"
+
+if [[ ! -f "${WS_DIR}/install/setup.bash" ]]; then
+  echo "Missing ${WS_DIR}/install/setup.bash. Build first: colcon build --symlink-install" >&2
+  exit 1
+fi
+safe_source "${WS_DIR}/install/setup.bash"
+
+USD_PATH="${WS_DIR}/src/go2_issac_stack/assets/unitree_model/Go2/usd/go2.usd"
 
 case "$PROFILE" in
   sensor_realism|perf)

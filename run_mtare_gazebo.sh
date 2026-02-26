@@ -2,10 +2,45 @@
 set -eo pipefail
 
 WS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${HOME}/miniforge3/etc/profile.d/conda.sh"
-conda activate "${CONDA_ENV:-cmu_env}"
-source /opt/ros/humble/setup.bash
-source "${WS_DIR}/install/setup.bash"
+ROS2_SETUP_BASH="${ROS2_SETUP_BASH:-/opt/ros/humble/setup.bash}"
+
+safe_source() {
+  local had_u=0
+  if [[ $- == *u* ]]; then
+    had_u=1
+    set +u
+  fi
+  # shellcheck disable=SC1090
+  source "$1"
+  local rc=$?
+  if [[ ${had_u} -eq 1 ]]; then
+    set -u
+  fi
+  return ${rc}
+}
+
+if [[ -f "${HOME}/miniforge3/etc/profile.d/conda.sh" ]]; then
+  safe_source "${HOME}/miniforge3/etc/profile.d/conda.sh"
+  conda activate "${CONDA_ENV:-cmu_env}"
+elif command -v micromamba >/dev/null 2>&1; then
+  eval "$(micromamba shell hook -s bash)"
+  micromamba activate "${CONDA_ENV:-cmu_env}"
+else
+  echo "Could not find conda/micromamba activation script for ${CONDA_ENV:-cmu_env}." >&2
+  exit 1
+fi
+
+if [[ ! -f "${ROS2_SETUP_BASH}" ]]; then
+  echo "Missing ROS2 setup script: ${ROS2_SETUP_BASH}" >&2
+  exit 1
+fi
+safe_source "${ROS2_SETUP_BASH}"
+
+if [[ ! -f "${WS_DIR}/install/setup.bash" ]]; then
+  echo "Missing ${WS_DIR}/install/setup.bash. Build first: colcon build --symlink-install" >&2
+  exit 1
+fi
+safe_source "${WS_DIR}/install/setup.bash"
 
 export ROS_LOG_DIR="${ROS_LOG_DIR:-/tmp/ros_logs}"
 mkdir -p "${ROS_LOG_DIR}"

@@ -2,11 +2,12 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROS2_SETUP_BASH="${ROS2_SETUP_BASH:-/opt/ros/humble/setup.bash}"
 cd "$ROOT_DIR"
 
 eval "$(micromamba shell hook -s bash)"
 micromamba activate cmu_env
-source /opt/ros/humble/setup.bash
+source "${ROS2_SETUP_BASH}"
 source "$ROOT_DIR/install/setup.bash"
 
 echo "[check] topic list"

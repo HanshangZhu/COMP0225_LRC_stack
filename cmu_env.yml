@@ -169,5 +169,3 @@ dependencies:
     - transforms3d==0.4.2
     - typing_extensions==4.15.0
     - virtualenv==20.35.4
-
-prefix: "/home/hz/miniforge3/envs/cmu_env"

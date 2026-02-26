@@ -9,10 +9,10 @@ Legacy launch files are still available as wrappers for compatibility.
 ## 1. Build and source
 
 ```bash
-cd ~/cmu_exploration_ws
+cd /path/to/cmu_exploration_ws
 source /opt/ros/humble/setup.bash
 colcon build --packages-select go2_nav_algorithms go2_gazebo_sim --symlink-install
-source ~/cmu_exploration_ws/install/setup.bash
+source install/setup.bash
 ```
 
 ## 2. Canonical run commands

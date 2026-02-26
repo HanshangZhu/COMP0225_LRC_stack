@@ -2,6 +2,7 @@
 set -euo pipefail
 
 WS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROS2_SETUP_BASH="${ROS2_SETUP_BASH:-/opt/ros/humble/setup.bash}"
 
 safe_source() {
   set +u
@@ -21,7 +22,11 @@ else
   exit 1
 fi
 
-safe_source /opt/ros/humble/setup.bash
+if [[ ! -f "${ROS2_SETUP_BASH}" ]]; then
+  echo "Missing ROS2 setup script: ${ROS2_SETUP_BASH}" >&2
+  exit 1
+fi
+safe_source "${ROS2_SETUP_BASH}"
 
 if [[ ! -f "${WS_DIR}/install/setup.bash" ]]; then
   echo "Missing ${WS_DIR}/install/setup.bash. Build first: colcon build --symlink-install" >&2
