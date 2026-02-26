@@ -67,10 +67,16 @@ Full cleanup (destructive):
 ./tools/clean_workspace.sh full --yes
 ```
 
-## 5. Run demo
+## 5. Run demo (Gazebo)
+
+Use one of the maintained launch scripts:
 
 ```bash
-./start_exploration.sh
+# CFPA2 dual-robot Gazebo flow
+./run_cfpa2_gazebo.sh
+
+# MTARE dual-robot Gazebo flow
+./run_mtare_gazebo.sh
 ```
 
 ## 6. Smoke test (headless checks)
@@ -81,7 +87,7 @@ In a second terminal:
 ./tools/smoke_check.sh
 ```
 
-Expected pass conditions:
+Expected pass conditions (for the default un-namespaced topic flow):
 - `/scan` exists and has at least one publisher
 - `/odom` exists
 - `/way_point` receives at least one message
