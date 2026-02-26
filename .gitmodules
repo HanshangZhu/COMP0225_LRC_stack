@@ -1,12 +1,12 @@
 [submodule "src/autonomy_stack_go2"]
 	path = src/autonomy_stack_go2
-	url = https://github.com/jizhang-cmu/autonomy_stack_go2.git
+	url = https://github.com/HanshangZhu/autonomy_stack_go2.git
 [submodule "src/unitree-go2-ros2"]
 	path = src/unitree-go2-ros2
 	url = https://github.com/HanshangZhu/unitree-go2-ros2.git
 [submodule "src/fast_lio"]
 	path = src/fast_lio
-	url = https://github.com/Ericsii/FAST_LIO_ROS2
+	url = https://github.com/HanshangZhu/FAST_LIO_ROS2.git
 [submodule "src/mtare_ros1_ws/src/mtare_planner"]
 	path = src/mtare_ros1_ws/src/mtare_planner
 	url = https://github.com/HanshangZhu/tare_planner.git
