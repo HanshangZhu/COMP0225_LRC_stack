@@ -1,111 +1,229 @@
-# CMU-Exploration (Flagged) Walkthrough <!-- title -->
-<!-- This repo walkthrough is tailored to the current Gazebo stack. --> <!-- note -->
-<!-- All descriptions focus on the simulation stack under development. --> <!-- scope -->
- <!-- spacer -->
-## Repository Flag <!-- section -->
-This repository is a flagged variant of the CMU-Exploration stack. <!-- status -->
-The original CMU-Exploration code is preserved and not modified. <!-- constraint -->
-All additions and changes target the Gazebo simulation layer. <!-- intent -->
-The goal is rapid iteration on autonomy behavior in simulation. <!-- goal -->
- <!-- spacer -->
-## Current Focus: Gazebo Simulation (CFPA2 + MTARE) <!-- section -->
-The Gazebo stack is actively being developed and stabilized. <!-- status -->
-Primary work involves dual-robot exploration and navigation behavior. <!-- focus -->
-The simulation is the testbed for autonomy and frontier logic. <!-- usage -->
-Unity/Isaac stacks are not the primary target here. <!-- scope -->
-This walkthrough documents the Gazebo stack only. <!-- scope -->
- <!-- spacer -->
-## Gazebo Stack: High-Level Flow <!-- section -->
-1) Launch environment, robots, and bridges via `run_cfpa2_gazebo.sh` or `run_mtare_gazebo.sh`. <!-- step -->
-2) Build a 2D occupancy grid from the front laser. <!-- step -->
-3) Detect geometric frontiers and publish goals. <!-- step -->
-4) Drive toward the goal using reactive obstacle avoidance. <!-- step -->
-5) Visualize goals and frontiers in RViz/Gazebo. <!-- step -->
- <!-- spacer -->
-## Gazebo Stack: Key Components <!-- section -->
-### 1) Simulation Core <!-- subsection -->
-- Gazebo Classic world + robot spawn. <!-- component -->
-- `go2_gazebo_sim` package provides world and launch files. <!-- component -->
-- `run_cfpa2_gazebo.sh` calls `two_go2_t_world_cfpa2.launch.py`. <!-- entrypoint -->
-- `run_mtare_gazebo.sh` calls `dual_go2_modular.launch.py` with MTARE profile. <!-- entrypoint -->
-- `gazebo_ros` plugins integrate Gazebo with ROS 2. <!-- bridge -->
- <!-- spacer -->
-### 2) Robot Model + Control <!-- subsection -->
-- Unitree Go2 robot description (URDF/Xacro). <!-- model -->
-- CHAMP-based quadruped controller stack. <!-- control -->
-- `gazebo_ros2_control` drives joint controllers. <!-- control -->
-- `/cmd_vel` is the target velocity interface. <!-- io -->
- <!-- spacer -->
-### 3) Sensors (Gazebo) <!-- subsection -->
-- Front 2D laser (`front_laser`) publishes `/scan`. <!-- sensor -->
-- LaserScan is the primary obstacle signal. <!-- sensor -->
-- No 3D lidar or depth camera in this stack. <!-- limitation -->
- <!-- spacer -->
-### 4) Exploration + Goal Generation <!-- subsection -->
-- `geometric_frontier.py` builds an occupancy grid. <!-- node -->
-- Frontiers are free cells adjacent to unknown space. <!-- algorithm -->
-- Clustering selects candidate frontier regions. <!-- algorithm -->
-- Goal selection uses largest-cluster heuristic. <!-- policy -->
-- Published goal topic: `/way_point`. <!-- io -->
- <!-- spacer -->
-### 5) Navigation + Obstacle Avoidance <!-- subsection -->
-- `reactive_nav.py` drives toward the current goal. <!-- node -->
-- Uses live `/scan` for reactive obstacle avoidance. <!-- algorithm -->
-- No global path planner is used here. <!-- decision -->
-- Motion is goal-as-you-move, not preplanned. <!-- behavior -->
- <!-- spacer -->
-### 6) Safety + Recovery <!-- subsection -->
-- `wall_collision_checker.py` monitors `/scan` for near-wall stops. <!-- safety -->
-- `frontier_recovery.py` publishes recovery goals if stopped. <!-- recovery -->
-- `motion_monitor.py` reports movement and stop state. <!-- observability -->
- <!-- spacer -->
-### 7) Visualization <!-- subsection -->
-- RViz markers for frontier regions and goals. <!-- viz -->
-- Gazebo sphere marker for the current frontier goal. <!-- viz -->
- <!-- spacer -->
-## Gazebo Stack: Tech Stack (Detailed) <!-- section -->
-### Runtime + Build <!-- subsection -->
-- ROS 2 Humble (`rclpy`, `rclcpp`). <!-- runtime -->
-- `colcon build --symlink-install`. <!-- build -->
-- `micromamba` environment (`cmu_env`). <!-- env -->
-- FastDDS configuration to disable SHM when needed. <!-- middleware -->
- <!-- spacer -->
-### Core ROS 2 Packages <!-- subsection -->
-- `sensor_msgs`: LaserScan / PointCloud2. <!-- msgs -->
-- `nav_msgs`: Odometry / OccupancyGrid. <!-- msgs -->
-- `geometry_msgs`: TwistStamped / PointStamped. <!-- msgs -->
-- `visualization_msgs`: Marker / MarkerArray. <!-- msgs -->
-- `tf2_ros`: transforms for frames. <!-- tf -->
- <!-- spacer -->
-### Gazebo Integration <!-- subsection -->
-- `gazebo_ros` and `gazebo_ros2_control`. <!-- gazebo -->
-- `gazebo_msgs` for spawn/delete entities. <!-- gazebo -->
-- Gazebo world: `l_corridor.world`. <!-- world -->
- <!-- spacer -->
-### Autonomy Stack Adapters (Gazebo) <!-- subsection -->
-- `qos_bridge.py`: BestEffort to Reliable scan bridge. <!-- bridge -->
-- `twist_bridge.py`: `/cmd_vel_stamped` → `/cmd_vel`. <!-- bridge -->
-- `goalpoint_to_waypoint.py`: RViz goal → `/way_point`. <!-- bridge -->
- <!-- spacer -->
-### Custom Exploration Nodes <!-- subsection -->
-- `geometric_frontier.py`: frontier detection + goals. <!-- node -->
-- `reactive_nav.py`: goal-driven reactive navigation. <!-- node -->
-- `gazebo_frontier_visual.py`: Gazebo goal marker. <!-- node -->
- <!-- spacer -->
-## How to Run (Gazebo) <!-- section -->
-1) Ensure the `cmu_env` environment is available. <!-- step -->
-2) Run one launcher: `./run_cfpa2_gazebo.sh` or `./run_mtare_gazebo.sh`. <!-- step -->
-3) Use RViz to view frontiers and goals. <!-- step -->
-4) Observe robot motion in Gazebo. <!-- step -->
- <!-- spacer -->
-## Design Notes <!-- section -->
-- This stack is optimized for fast ROS 2 iteration. <!-- note -->
-- 2D lidar drives exploration and obstacle logic. <!-- note -->
-- CMU 3D terrain planner is not used in this stack. <!-- note -->
-- The system favors robustness over optimal paths. <!-- note -->
- <!-- spacer -->
-## Directory Map (Gazebo) <!-- section -->
-- `src/go2_gazebo_sim/launch/` — Gazebo launch files (`two_go2_t_world_cfpa2.launch.py`, `dual_go2_modular.launch.py`). <!-- map -->
-- `src/go2_gazebo_sim/worlds/` — Gazebo world definitions. <!-- map -->
-- `src/go2_gazebo_sim/scripts/` — Gazebo-specific nodes. <!-- map -->
-- `run_cfpa2_gazebo.sh` / `run_mtare_gazebo.sh` — top-level launch scripts. <!-- map -->
+# Workspace Walkthrough
+
+This document explains the current runtime wiring for the Gazebo-first stack and where to inspect code when behavior changes.
+
+## 1. Canonical Launch Model
+
+Primary launch file:
+
+- `src/go2_gazebo_sim/launch/dual_go2_modular.launch.py`
+
+Compatibility wrappers still exist and forward into the canonical launch:
+
+- `two_go2_t_world_cfpa2.launch.py`
+- `two_go2_t_world_mtare_ros2.launch.py`
+- other legacy wrappers under `src/go2_gazebo_sim/launch/`
+
+The wrapper used by `run_cfpa2_gazebo.sh` is:
+
+- `two_go2_t_world_cfpa2.launch.py`
+
+It forwards to `dual_go2_modular.launch.py` with:
+
+- `profile:=mtare_ros2`
+- default `mtare_algorithm_mode:=cfpa2`
+- default `planner_backend:=cfpa2`
+
+## 2. Top-Level Script Behavior
+
+### `run_cfpa2_gazebo.sh`
+
+- Activates `cmu_env` (conda or micromamba path)
+- Sources ROS2 Humble and workspace `install/setup.bash`
+- Launches:
+
+```bash
+ros2 launch go2_gazebo_sim two_go2_t_world_cfpa2.launch.py
+```
+
+### `run_mtare_gazebo.sh`
+
+- Activates `cmu_env`
+- Sources ROS2/workspace
+- Optionally kills stale Gazebo processes
+- Picks free `GAZEBO_MASTER_URI` port from `11345-11350`
+- Launches:
+
+```bash
+ros2 launch go2_gazebo_sim dual_go2_modular.launch.py \
+  profile:=mtare_ros2 \
+  planner_backend:=tare_ros2_exact \
+  ...
+```
+
+Important: this script defaults to `planner_backend:=tare_ros2_exact`. For the most robust default in this snapshot, pass:
+
+```bash
+./run_mtare_gazebo.sh planner_backend:=mtare_ros2
+```
+
+### `run_mtare_ros1_bridge_container.sh`
+
+- Builds/starts container image `cmu-mtare-ros1-bridge:foxy-noetic`
+- Mounts `src/mtare_ros1_ws`
+- Runs `roscore`, ROS1 `tare_planner` launch, and ROS1<->ROS2 `dynamic_bridge`
+
+### `run_exploration_issac.sh`
+
+- Starts Isaac-only profiles (`autonomy_baseline`, `sensor_realism`, `debug`)
+- Kept for reference; Gazebo is the main development path
+
+## 3. `dual_go2_modular` Execution Flow
+
+### 3.1 Profile and backend resolution
+
+`planner_backend` accepted values:
+
+- `auto`
+- `none`
+- `coordinated`
+- `go2_nav_algorithms`
+- `cfpa2`
+- `mtare_ros2`
+- `ros1_mtare`
+- `far_ros2`
+- `tare_ros2_exact`
+
+`auto` resolves as:
+
+- profile `coordinated` -> backend `coordinated`
+- profile `mtare_ros2` -> backend `mtare_ros2`
+- otherwise -> backend `none`
+
+### 3.2 Startup timeline
+
+The launch brings up, in order:
+
+1. Optional stale-process cleanup (`cleanup_stale`)
+2. `gzserver`
+3. optional `gzclient` (`gui:=true`)
+4. RViz (`rviz:=true`)
+5. robot A stack
+6. wait until robot A controllers are loaded
+7. robot B stack
+8. wait until robot B controllers are loaded
+9. backend coordinator/assigner actions
+10. global observability nodes
+
+This controller-gated ordering is intentional to avoid race conditions in spawn/control startup.
+
+### 3.3 Robot spawn/control pipeline
+
+Main files:
+
+- `src/go2_gazebo_sim/launch/modules/assets.py`
+- `src/go2_gazebo_sim/config/ros_control/ros_control_robot_a.yaml`
+- `src/go2_gazebo_sim/config/ros_control/ros_control_robot_b.yaml`
+
+For each robot namespace (`robot_a`, `robot_b`), `build_dual_robot_stack(...)` includes:
+
+- namespaced `robot_state_publisher`
+- CHAMP controller/state-estimation nodes
+- `spawn_entity_direct.py`
+- `initial_pose_guard.py`
+- controller spawners:
+  - `<ns>_joint_states_controller`
+  - `<ns>_joint_group_effort_controller`
+- `stand_up_slowly.py`
+
+`build_namespaced_robot_description(...)` rewrites plugin namespaces/remaps and injects the namespace-specific ros2_control YAML path.
+
+### 3.4 Perception/navigation pipeline (per robot)
+
+Standard ROS2 path:
+
+- `/registered_scan` -> `qos_bridge.py` -> `/registered_scan_reliable`
+- `/registered_scan_reliable` -> `pointcloud_to_laserscan` -> `/scan_3d`
+- `/scan_3d` + `/odom/nav` -> `simple_scan_mapper_cpp` -> `/map`
+- frontier node -> waypoint topic (`/way_point` or `/way_point_raw` depending on profile/backend)
+- `reactive_nav.py` consumes waypoint + scan + odom and publishes `/cmd_vel_stamped`
+- `twist_bridge.py` converts `/cmd_vel_stamped` -> `/cmd_vel`
+
+SLAM/odom source:
+
+- `use_fast_lio:=false`: GT odom relay to `/odom/nav`
+- `use_fast_lio:=true`: FAST-LIO pipeline and odom relay from `/Odometry`
+
+### 3.5 Backend logic
+
+- `none`: no global coordinator; frontiers feed local waypoint directly
+- `coordinated` / `go2_nav_algorithms`: runs `multi_robot_goal_assigner.py`
+- `mtare_ros2`: runs `mtare_coordinator.py` (`algorithm_mode` configurable)
+- `cfpa2`: same coordinator executable, forced `algorithm_mode=cfpa2`
+- `tare_ros2_exact`: exact-split flow with:
+  - `mtare_topic_bridge.py`
+  - `mtare_behavior_executive_cpp`
+  - `mtare_coordinator.py output_mode:=exact_split`
+  - FAR planners (+ optional `graph_decoder` shared bus)
+
+`tare_ros2_exact` has stricter package requirements than `mtare_ros2`.
+
+### 3.6 RViz logic
+
+RViz profile selection in `dual_go2_modular`:
+
+- `profile:=mtare_ros2` -> `src/go2_gazebo_sim/rviz/dual_mtare_shared.rviz`
+- other profiles -> both:
+  - `src/go2_gazebo_sim/rviz/dual_robot_a.rviz`
+  - `src/go2_gazebo_sim/rviz/dual_robot_b.rviz`
+
+If RViz behavior differs from Isaac-era expectations, this profile-driven RViz switch is one of the first places to compare.
+
+## 4. Package Ownership Map
+
+- `go2_gazebo_sim`: launch orchestration, spawn wrappers, local control helpers, observability
+- `go2_nav_algorithms`: map/frontier/goal-assigner pipeline components
+- `mtare_ros2`: MTARE coordinator + exact backend bridge/executive
+- `autonomy_stack_go2` (submodule): FAR planner / graph stack dependencies
+- `fast_lio` (submodule): optional LIO odometry backend
+- `unitree-go2-ros2` (submodule): Go2 CHAMP description/controller resources
+- `mtare_ros1_ws/src/mtare_planner` (submodule): ROS1 planner for bridge mode
+
+## 5. Common Failure Modes
+
+1. `ValueError: '...launch.py' is not a valid package name`
+
+Cause: using `ros2 launch` with an absolute file path in package slot.
+Fix: use package+file form, for example:
+
+```bash
+ros2 launch go2_gazebo_sim two_go2_t_world_cfpa2.launch.py
+```
+
+2. `FileNotFoundError` under `install/.../launch/...`
+
+Cause: stale/missing install tree after code changes.
+Fix: rebuild and re-source workspace:
+
+```bash
+colcon build --symlink-install --cmake-clean-cache
+source setup_cmu_env.bash
+```
+
+3. controller_manager: `The 'type' param was not defined`
+
+Cause: ros2_control YAML mismatch/stale install or namespacing mismatch.
+Primary files to verify:
+
+- `src/go2_gazebo_sim/config/ros_control/ros_control_robot_a.yaml`
+- `src/go2_gazebo_sim/config/ros_control/ros_control_robot_b.yaml`
+- `src/go2_gazebo_sim/launch/modules/assets.py`
+
+4. `catkin` missing during `colcon build`
+
+Cause: colcon trying to build ROS1 workspace.
+Fix:
+
+```bash
+touch src/mtare_ros1_ws/COLCON_IGNORE
+```
+
+## 6. Minimal Debug Checklist
+
+```bash
+source setup_cmu_env.bash
+colcon list | rg 'go2_gazebo_sim|go2_nav_algorithms|mtare_ros2'
+./run_cfpa2_gazebo.sh gui:=false rviz:=false
+ros2 topic list | rg 'robot_a|robot_b|way_point|nav_status|coordinator_map'
+ros2 topic echo /robot_a/nav_status --once
+```
