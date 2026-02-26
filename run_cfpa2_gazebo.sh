@@ -32,4 +32,4 @@ safe_source "${WS_DIR}/install/setup.bash"
 export ROS_LOG_DIR="${ROS_LOG_DIR:-/tmp/ros_logs}"
 mkdir -p "${ROS_LOG_DIR}"
 
-exec ros2 launch "${WS_DIR}/src/go2_gazebo_sim/launch/two_go2_t_world_cfpa2.launch.py" "$@"
+exec ros2 launch go2_gazebo_sim two_go2_t_world_cfpa2.launch.py "$@"

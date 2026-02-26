@@ -1,0 +1,122 @@
+{
+  "version": "1.0",
+  "defaults": {
+    "frontier_planner_id": "simple_frontier_v1",
+    "goal_assigner_id": "burgard_v1",
+    "global_planner_id": "none"
+  },
+  "mapping": {
+    "params": {
+      "max_scan_odom_dt": 1.0,
+      "max_map_odom_dt": 5.0,
+      "odom_history_sec": 2.0,
+      "mapper_update_rate": 2.0,
+      "frontier_update_rate": 2.0
+    }
+  },
+  "navigation": {
+    "reactive_nav": {
+      "params": {
+        "goal_tolerance": 0.15,
+        "max_linear_speed": 0.28,
+        "obstacle_slow_dist": 0.85,
+        "obstacle_stop_dist": 0.38,
+        "planner_grid_radius": 8.0,
+        "planner_goal_clip_distance": 6.0,
+        "wall_scan_enabled": true,
+        "wall_scan_trigger_dist": 0.45
+      }
+    }
+  },
+  "modules": {
+    "frontier_planners": [
+      {
+        "id": "simple_frontier_v1",
+        "node": {
+          "package": "go2_issac_stack",
+          "executable": "simple_frontier_explorer.py"
+        },
+        "params": {
+          "goal_selection_mode": "nearest",
+          "frontier_min_size": 6
+        }
+      }
+    ],
+    "goal_assigners": [
+      {
+        "id": "burgard_v1",
+        "node": {
+          "package": "go2_gazebo_sim",
+          "executable": "multi_robot_goal_assigner.py"
+        },
+        "params": {
+          "algorithm_mode": "legacy",
+          "publish_rate": 1.0,
+          "beta": 0.18,
+          "sensor_range": 3.5,
+          "frontier_stride": 2,
+          "max_targets": 800,
+          "switch_hysteresis": 0.2,
+          "switch_min_dist": 0.8,
+          "min_assign_distance": 0.33,
+          "reached_blacklist_dist": 0.35,
+          "reached_blacklist_repeat_count": 3,
+          "reached_blacklist_ttl_sec": 12.0,
+          "goal_topic_suffix": "/way_point_assigned"
+        }
+      },
+      {
+        "id": "committed_burgard_v1",
+        "node": {
+          "package": "go2_gazebo_sim",
+          "executable": "multi_robot_goal_assigner.py"
+        },
+        "params": {
+          "algorithm_mode": "committed",
+          "goal_lock_sec": 5.0,
+          "progress_window_sec": 3.0,
+          "progress_min_delta_m": 0.15,
+          "blacklist_fail_count": 2,
+          "blacklist_ttl_sec": 30.0,
+          "switch_hysteresis": 0.25,
+          "switch_min_dist": 1.0,
+          "min_assign_distance": 0.3,
+          "reached_blacklist_dist": 0.3,
+          "reached_blacklist_repeat_count": 3,
+          "reached_blacklist_ttl_sec": 12.0,
+          "publish_rate": 1.0,
+          "beta": 0.18,
+          "sensor_range": 3.5,
+          "frontier_stride": 2,
+          "max_targets": 800,
+          "goal_topic_suffix": "/way_point_assigned"
+        }
+      },
+      {
+        "id": "passthrough_v1",
+        "node": {
+          "package": "go2_gazebo_sim",
+          "executable": "goal_assigner_passthrough.py"
+        },
+        "params": {
+          "publish_rate": 0.0,
+          "hold_last": true,
+          "input_topic_suffix": "/way_point_raw",
+          "output_topic_suffix": "/way_point_assigned"
+        }
+      }
+    ],
+    "global_planners": [
+      {
+        "id": "none",
+        "mode": "passthrough",
+        "params": {
+          "publish_rate": 0.0,
+          "hold_last": true,
+          "input_topic_suffix": "/way_point_assigned",
+          "output_topic_suffix": "/way_point_coord"
+        }
+      }
+    ]
+  }
+}
