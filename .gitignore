@@ -23,3 +23,7 @@
 
 # ROS logs
 /.ros/
+
+# Local ROS1 workspace build artifacts
+/src/mtare_ros1_ws/build/
+/src/mtare_ros1_ws/devel/
