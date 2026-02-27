@@ -22,7 +22,7 @@ from launch.actions import (
     RegisterEventHandler,
     TimerAction,
 )
-from launch.event_handlers import OnProcessExit
+from launch.event_handlers import OnProcessExit, OnProcessStart
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -486,6 +486,16 @@ def _build_dual_profile_actions(context):
     rviz_config_robot_b = os.path.join(go2_gazebo_pkg, "rviz", "dual_robot_b.rviz")
     rviz_config_mtare_shared = os.path.join(go2_gazebo_pkg, "rviz", "dual_mtare_shared.rviz")
     mtare_params_file = os.path.join(mtare_ros2_pkg, "config", "mtare_ros2.yaml")
+    cfpa2_params_file = ""
+    if planner_backend == "cfpa2":
+        try:
+            cfpa2_pkg = get_package_share_directory("cfpa2_collaborative_autonomy")
+        except PackageNotFoundError as exc:
+            raise RuntimeError(
+                "planner_backend=cfpa2 requires package 'cfpa2_collaborative_autonomy'. "
+                "Build the workspace after adding src/cfpa2_collaborative_autonomy."
+            ) from exc
+        cfpa2_params_file = os.path.join(cfpa2_pkg, "config", "cfpa2_coordinator.yaml")
     exact_far_world_frame = _get(context, "exact_far_world_frame").strip() or "map"
 
     use_tare_ros2_exact = planner_backend == "tare_ros2_exact"
@@ -647,9 +657,11 @@ def _build_dual_profile_actions(context):
 
     robot_a_actions = []
     robot_b_actions = []
+    robot_a_pose_guard_node = None
+    robot_b_pose_guard_node = None
 
     if enable_assets:
-        robot_a_actions += build_dual_robot_stack(
+        robot_a_stack_actions, robot_a_stack_handles = build_dual_robot_stack(
             ns="robot_a",
             spawn_x=robot_a_spawn_x,
             spawn_y=robot_a_spawn_y,
@@ -666,8 +678,9 @@ def _build_dual_profile_actions(context):
             standup_delay_sec=4.0,
             pose_guard_hold_sec=12.0,
             activate_controllers_on_spawn=True,
+            return_handles=True,
         )
-        robot_b_actions += build_dual_robot_stack(
+        robot_b_stack_actions, robot_b_stack_handles = build_dual_robot_stack(
             ns="robot_b",
             spawn_x=robot_b_spawn_x,
             spawn_y=robot_b_spawn_y,
@@ -684,7 +697,12 @@ def _build_dual_profile_actions(context):
             standup_delay_sec=4.8,
             pose_guard_hold_sec=13.0,
             activate_controllers_on_spawn=True,
+            return_handles=True,
         )
+        robot_a_actions += robot_a_stack_actions
+        robot_b_actions += robot_b_stack_actions
+        robot_a_pose_guard_node = robot_a_stack_handles.get("initial_pose_guard_node")
+        robot_b_pose_guard_node = robot_b_stack_handles.get("initial_pose_guard_node")
 
     robot_a_actions += _robot_autonomy_actions(
         ns="robot_a",
@@ -786,6 +804,20 @@ def _build_dual_profile_actions(context):
                     {"exploration_gain_radius_cells": int(_get(context, "mtare_exploration_gain_radius_cells"))},
                     {"meeting_min_distance": float(_get(context, "mtare_meeting_min_distance"))},
                     {"teammate_stale_ttl_sec": float(_get(context, "mtare_teammate_stale_ttl_sec"))},
+                    {"cfpa2_w_ig": float(_get(context, "cfpa2_w_ig"))},
+                    {"cfpa2_w_c": float(_get(context, "cfpa2_w_c"))},
+                    {"cfpa2_w_sw": float(_get(context, "cfpa2_w_sw"))},
+                    {"cfpa2_lambda_overlap": float(_get(context, "cfpa2_lambda_overlap"))},
+                    {"cfpa2_sigma_overlap_m": float(_get(context, "cfpa2_sigma_overlap_m"))},
+                    {"cfpa2_stuck_lock_sec": float(_get(context, "cfpa2_stuck_lock_sec"))},
+                    {"cfpa2_stuck_min_motion_m": float(_get(context, "cfpa2_stuck_min_motion_m"))},
+                    {"cfpa2_stuck_blacklist_sec": float(_get(context, "cfpa2_stuck_blacklist_sec"))},
+                    {"cfpa2_close_stop_radius_m": float(_get(context, "cfpa2_close_stop_radius_m"))},
+                    {
+                        "cfpa2_close_stop_speed_epsilon": float(
+                            _get(context, "cfpa2_close_stop_speed_epsilon")
+                        )
+                    },
                     {"marker_frame_override": "world"},
                 ],
                 output="screen",
@@ -816,6 +848,83 @@ def _build_dual_profile_actions(context):
 
     wait_robot_a = _wait_controllers_loaded("robot_a") if enable_assets else None
     wait_robot_b = _wait_controllers_loaded("robot_b") if enable_assets else None
+
+    def _coordinator_start_actions(coordinator_node):
+        if (
+            (not enable_assets)
+            or robot_a_pose_guard_node is None
+            or robot_b_pose_guard_node is None
+        ):
+            return [
+                LogInfo(msg="[planner_startup] pose-guard gating unavailable; using fallback 20s delayed start."),
+                RegisterEventHandler(
+                    OnProcessStart(
+                        target_action=coordinator_node,
+                        on_start=[LogInfo(msg="[planner_startup] coordinator process started (fallback path).")],
+                    )
+                ),
+                TimerAction(period=20.0, actions=[coordinator_node]),
+            ]
+
+        pose_guard_state = {"robot_a": False, "robot_b": False, "started": False}
+
+        def _make_pose_guard_exit_cb(ns: str):
+            def _cb(_context, *_args, **_kwargs):
+                pose_guard_state[ns] = True
+                if pose_guard_state["started"]:
+                    return []
+                if pose_guard_state["robot_a"] and pose_guard_state["robot_b"]:
+                    pose_guard_state["started"] = True
+                    return [
+                        LogInfo(
+                            msg="[planner_startup] pose guards exited for robot_a and robot_b; "
+                            "starting coordinator in 0.5s."
+                        ),
+                        TimerAction(period=0.5, actions=[coordinator_node]),
+                    ]
+                return [
+                    LogInfo(
+                        msg=f"[planner_startup] {ns} initial_pose_guard exited; waiting for the other robot."
+                    )
+                ]
+
+            return _cb
+
+        def _fallback_start_cb(_context, *_args, **_kwargs):
+            if pose_guard_state["started"]:
+                return []
+            pose_guard_state["started"] = True
+            return [
+                LogInfo(
+                    msg=(
+                        "[planner_startup] pose-guard timeout exceeded; "
+                        "starting coordinator via fallback timer."
+                    )
+                ),
+                coordinator_node,
+            ]
+
+        return [
+            RegisterEventHandler(
+                OnProcessStart(
+                    target_action=coordinator_node,
+                    on_start=[LogInfo(msg="[planner_startup] coordinator process started after pose-guard gating.")],
+                )
+            ),
+            RegisterEventHandler(
+                OnProcessExit(
+                    target_action=robot_a_pose_guard_node,
+                    on_exit=[OpaqueFunction(function=_make_pose_guard_exit_cb("robot_a"))],
+                )
+            ),
+            RegisterEventHandler(
+                OnProcessExit(
+                    target_action=robot_b_pose_guard_node,
+                    on_exit=[OpaqueFunction(function=_make_pose_guard_exit_cb("robot_b"))],
+                )
+            ),
+            TimerAction(period=30.0, actions=[OpaqueFunction(function=_fallback_start_cb)]),
+        ]
 
     if wait_robot_a is not None:
         actions.append(TimerAction(period=5.0, actions=robot_a_actions + [wait_robot_a]))
@@ -862,8 +971,7 @@ def _build_dual_profile_actions(context):
                     ],
                 )
             )
-        elif planner_backend in {"mtare_ros2", "cfpa2"}:
-            mtare_algorithm_mode = "cfpa2" if planner_backend == "cfpa2" else _get(context, "mtare_algorithm_mode")
+        elif planner_backend == "mtare_ros2":
             actions.append(
                 TimerAction(
                     period=20.0,
@@ -876,7 +984,7 @@ def _build_dual_profile_actions(context):
                                 mtare_params_file,
                                 {"use_sim_time": use_sim_time},
                                 {"namespaces": ["robot_a", "robot_b"]},
-                                {"algorithm_mode": mtare_algorithm_mode},
+                                {"algorithm_mode": _get(context, "mtare_algorithm_mode")},
                                 {"publish_rate": float(_get(context, "mtare_goal_publish_rate"))},
                                 {"goal_topic_suffix": "/way_point_coord"},
                                 {"use_shared_map": use_shared_map},
@@ -898,11 +1006,112 @@ def _build_dual_profile_actions(context):
                                 },
                                 {"meeting_min_distance": float(_get(context, "mtare_meeting_min_distance"))},
                                 {"teammate_stale_ttl_sec": float(_get(context, "mtare_teammate_stale_ttl_sec"))},
+                                {"cfpa2_w_ig": float(_get(context, "cfpa2_w_ig"))},
+                                {"cfpa2_w_c": float(_get(context, "cfpa2_w_c"))},
+                                {"cfpa2_w_sw": float(_get(context, "cfpa2_w_sw"))},
+                                {"cfpa2_lambda_overlap": float(_get(context, "cfpa2_lambda_overlap"))},
+                                {"cfpa2_sigma_overlap_m": float(_get(context, "cfpa2_sigma_overlap_m"))},
+                                {"cfpa2_stuck_lock_sec": float(_get(context, "cfpa2_stuck_lock_sec"))},
+                                {"cfpa2_stuck_min_motion_m": float(_get(context, "cfpa2_stuck_min_motion_m"))},
+                                {"cfpa2_stuck_blacklist_sec": float(_get(context, "cfpa2_stuck_blacklist_sec"))},
+                                {"cfpa2_close_stop_radius_m": float(_get(context, "cfpa2_close_stop_radius_m"))},
+                                {
+                                    "cfpa2_close_stop_speed_epsilon": float(
+                                        _get(context, "cfpa2_close_stop_speed_epsilon")
+                                    )
+                                },
                                 {"marker_frame_override": "world"},
                             ],
                             output="screen",
                         )
                     ],
+                )
+            )
+        elif planner_backend == "cfpa2":
+            actions.extend(
+                _coordinator_start_actions(
+                    Node(
+                        package="cfpa2_collaborative_autonomy",
+                        executable="cfpa2_coordinator_node",
+                        name="cfpa2_coordinator",
+                        parameters=[
+                            cfpa2_params_file,
+                            {"use_sim_time": use_sim_time},
+                            {"namespaces": ["robot_a", "robot_b"]},
+                            {"algorithm_mode": "cfpa2"},
+                            {"publish_rate": float(_get(context, "mtare_goal_publish_rate"))},
+                            {"goal_topic_suffix": "/way_point_coord"},
+                            {"use_shared_map": use_shared_map},
+                            {"shared_map_topic": _get(context, "shared_map_topic")},
+                            {"shared_map_wait_sec": float(_get(context, "shared_map_wait_sec"))},
+                            {"overlap_weight": float(_get(context, "mtare_overlap_weight"))},
+                            {
+                                "communication_timeout_sec": float(
+                                    _get(context, "mtare_communication_timeout_sec")
+                                )
+                            },
+                            {"prediction_horizon_sec": float(_get(context, "mtare_prediction_horizon_sec"))},
+                            {"pursuit_weight": float(_get(context, "mtare_pursuit_weight"))},
+                            {"pursuit_switch_margin": float(_get(context, "mtare_pursuit_switch_margin"))},
+                            {
+                                "exploration_gain_radius_cells": int(
+                                    _get(context, "mtare_exploration_gain_radius_cells")
+                                )
+                            },
+                            {"meeting_min_distance": float(_get(context, "mtare_meeting_min_distance"))},
+                            {"teammate_stale_ttl_sec": float(_get(context, "mtare_teammate_stale_ttl_sec"))},
+                            {"cfpa2_w_ig": float(_get(context, "cfpa2_w_ig"))},
+                            {"cfpa2_w_c": float(_get(context, "cfpa2_w_c"))},
+                            {"cfpa2_w_sw": float(_get(context, "cfpa2_w_sw"))},
+                            {"cfpa2_lambda_overlap": float(_get(context, "cfpa2_lambda_overlap"))},
+                            {"cfpa2_sigma_overlap_m": float(_get(context, "cfpa2_sigma_overlap_m"))},
+                            {"cfpa2_stuck_lock_sec": float(_get(context, "cfpa2_stuck_lock_sec"))},
+                            {"cfpa2_stuck_min_motion_m": float(_get(context, "cfpa2_stuck_min_motion_m"))},
+                            {"cfpa2_stuck_blacklist_sec": float(_get(context, "cfpa2_stuck_blacklist_sec"))},
+                            {"cfpa2_close_stop_radius_m": float(_get(context, "cfpa2_close_stop_radius_m"))},
+                            {
+                                "cfpa2_close_stop_speed_epsilon": float(
+                                    _get(context, "cfpa2_close_stop_speed_epsilon")
+                                )
+                            },
+                            {"cfpa2_space_time_enabled": _as_bool(_get(context, "cfpa2_space_time_enabled"))},
+                            {"cfpa2_space_time_horizon_sec": float(_get(context, "cfpa2_space_time_horizon_sec"))},
+                            {"cfpa2_space_time_dt_sec": float(_get(context, "cfpa2_space_time_dt_sec"))},
+                            {
+                                "cfpa2_space_time_safety_radius_m": float(
+                                    _get(context, "cfpa2_space_time_safety_radius_m")
+                                )
+                            },
+                            {
+                                "cfpa2_space_time_waypoint_lookahead_m": float(
+                                    _get(context, "cfpa2_space_time_waypoint_lookahead_m")
+                                )
+                            },
+                            {
+                                "cfpa2_space_time_window_margin_m": float(
+                                    _get(context, "cfpa2_space_time_window_margin_m")
+                                )
+                            },
+                            {"cfpa2_space_time_max_expansions": int(_get(context, "cfpa2_space_time_max_expansions"))},
+                            {
+                                "cfpa2_space_time_assumed_speed_mps": float(
+                                    _get(context, "cfpa2_space_time_assumed_speed_mps")
+                                )
+                            },
+                            {
+                                "cfpa2_space_time_max_speed_mps": float(
+                                    _get(context, "cfpa2_space_time_max_speed_mps")
+                                )
+                            },
+                            {
+                                "cfpa2_frontier_min_cluster_area_m2": float(
+                                    _get(context, "cfpa2_frontier_min_cluster_area_m2")
+                                )
+                            },
+                            {"marker_frame_override": "world"},
+                        ],
+                        output="screen",
+                    )
                 )
             )
         elif planner_backend == "tare_ros2_exact":
@@ -1026,6 +1235,26 @@ def generate_launch_description():
             DeclareLaunchArgument("mtare_exploration_gain_radius_cells", default_value="4"),
             DeclareLaunchArgument("mtare_meeting_min_distance", default_value="1.5"),
             DeclareLaunchArgument("mtare_teammate_stale_ttl_sec", default_value="120.0"),
+            DeclareLaunchArgument("cfpa2_w_ig", default_value="1.0"),
+            DeclareLaunchArgument("cfpa2_w_c", default_value="0.6"),
+            DeclareLaunchArgument("cfpa2_w_sw", default_value="0.2"),
+            DeclareLaunchArgument("cfpa2_lambda_overlap", default_value="1.0"),
+            DeclareLaunchArgument("cfpa2_sigma_overlap_m", default_value="0.0"),
+            DeclareLaunchArgument("cfpa2_stuck_lock_sec", default_value="45.0"),
+            DeclareLaunchArgument("cfpa2_stuck_min_motion_m", default_value="0.20"),
+            DeclareLaunchArgument("cfpa2_stuck_blacklist_sec", default_value="60.0"),
+            DeclareLaunchArgument("cfpa2_close_stop_radius_m", default_value="0.35"),
+            DeclareLaunchArgument("cfpa2_close_stop_speed_epsilon", default_value="0.02"),
+            DeclareLaunchArgument("cfpa2_space_time_enabled", default_value="true"),
+            DeclareLaunchArgument("cfpa2_space_time_horizon_sec", default_value="5.0"),
+            DeclareLaunchArgument("cfpa2_space_time_dt_sec", default_value="0.40"),
+            DeclareLaunchArgument("cfpa2_space_time_safety_radius_m", default_value="0.45"),
+            DeclareLaunchArgument("cfpa2_space_time_waypoint_lookahead_m", default_value="0.90"),
+            DeclareLaunchArgument("cfpa2_space_time_window_margin_m", default_value="3.0"),
+            DeclareLaunchArgument("cfpa2_space_time_max_expansions", default_value="12000"),
+            DeclareLaunchArgument("cfpa2_space_time_assumed_speed_mps", default_value="0.25"),
+            DeclareLaunchArgument("cfpa2_space_time_max_speed_mps", default_value="0.60"),
+            DeclareLaunchArgument("cfpa2_frontier_min_cluster_area_m2", default_value="0.20"),
             DeclareLaunchArgument("robot_a_spawn_x", default_value="1.0"),
             DeclareLaunchArgument("robot_a_spawn_y", default_value="0.0"),
             DeclareLaunchArgument("robot_a_spawn_yaw", default_value="0.0"),

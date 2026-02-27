@@ -261,11 +261,16 @@ def main(args=None) -> None:
     rclpy.init(args=args)
     node = InitialPoseGuard()
     try:
-        rclpy.spin(node)
+        # Exit as soon as hold/enforcement is complete so launch OnProcessExit
+        # handlers can gate downstream planner startup.
+        while rclpy.ok() and not node.done:
+            rclpy.spin_once(node, timeout_sec=0.2)
     except KeyboardInterrupt:
         pass
-    node.destroy_node()
-    rclpy.shutdown()
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":
