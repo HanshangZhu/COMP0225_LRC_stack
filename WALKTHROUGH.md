@@ -197,7 +197,10 @@ Fix: rebuild and re-source workspace:
 
 ```bash
 colcon build --symlink-install --cmake-clean-cache
-source setup_cmu_env.bash
+eval "$(micromamba shell hook -s bash)"
+micromamba activate cmu_env
+source /opt/ros/humble/setup.bash
+source install/setup.bash
 ```
 
 3. controller_manager: `The 'type' param was not defined`
@@ -221,7 +224,10 @@ touch src/mtare_ros1_ws/COLCON_IGNORE
 ## 6. Minimal Debug Checklist
 
 ```bash
-source setup_cmu_env.bash
+eval "$(micromamba shell hook -s bash)"
+micromamba activate cmu_env
+source /opt/ros/humble/setup.bash
+source install/setup.bash
 colcon list | rg 'go2_gazebo_sim|go2_nav_algorithms|mtare_ros2'
 ./run_cfpa2_gazebo.sh gui:=false rviz:=false
 ros2 topic list | rg 'robot_a|robot_b|way_point|nav_status|coordinator_map'
