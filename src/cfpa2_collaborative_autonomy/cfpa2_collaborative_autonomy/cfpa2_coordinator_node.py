@@ -1,21 +1,9 @@
 #!/usr/bin/env python3
-"""Centralized multi-robot frontier goal assignment.
-
-Legacy mode score:
-    score(i, t) = U_t - beta * V_t^i
-
-Committed mode adds Level-1 anti-oscillation controls:
-- goal lock timer
-- progress-gated switching
-- frontier blacklist after repeated failures
-
-M-TARE mode adds:
-- overlap penalty (mutual exclusion)
-- pursuit utility when teammates become stale
-"""
+"""CFPA2 ROS2 coordinator with optional space-time A* waypointing."""
 
 from __future__ import annotations
 
+import heapq
 import math
 import sys
 import time
@@ -25,8 +13,8 @@ from typing import Any, Optional
 
 import rclpy
 from geometry_msgs.msg import Point, PointStamped
-from map_merge_utils import build_fallback_map, build_shared_with_local_patches
-from mdvrp_solver import first_goal_for_route, solve_mdvrp
+from .map_merge_utils import build_fallback_map, build_shared_with_local_patches
+from .mdvrp_solver import first_goal_for_route, solve_mdvrp
 from mtare_ros2.msg import GridWorldStatus
 from nav_msgs.msg import OccupancyGrid, Odometry
 from rclpy.node import Node
@@ -37,12 +25,15 @@ from visualization_msgs.msg import Marker, MarkerArray
 def _resolve_cfpa2_overlap_penalty_fn():
     candidates: list[Path] = []
     here = Path(__file__).resolve()
-    # Source-tree path when running via symlink-install or directly.
+
+    # Source-tree path: .../src/cfpa2_collaborative_autonomy/cfpa2_collaborative_autonomy
     if len(here.parents) >= 3:
-        candidates.append(here.parents[2] / "cfpa2-collaborative-exploration")
-    # Installed script path fallback.
-    if len(here.parents) >= 5:
-        candidates.append(here.parents[4] / "src" / "cfpa2-collaborative-exploration")
+        candidates.append(here.parents[2])
+
+    # Generic fallback: search upward for repository root containing cfpa2_demo.
+    for parent in here.parents[:8]:
+        if (parent / "cfpa2_demo").is_dir():
+            candidates.append(parent)
 
     for root in candidates:
         if not (root / "cfpa2_demo").is_dir():
@@ -83,9 +74,9 @@ def select_first_route_goals(
     return goals
 
 
-class MTareCoordinator(Node):
+class CFPA2Coordinator(Node):
     def __init__(self) -> None:
-        super().__init__("mtare_coordinator")
+        super().__init__("cfpa2_coordinator")
 
         self.declare_parameter("namespaces", ["robot_a", "robot_b"])
         self.declare_parameter("publish_rate", 1.0)
@@ -126,6 +117,21 @@ class MTareCoordinator(Node):
         self.declare_parameter("cfpa2_w_sw", 0.2)
         self.declare_parameter("cfpa2_lambda_overlap", 1.0)
         self.declare_parameter("cfpa2_sigma_overlap_m", 0.0)
+        self.declare_parameter("cfpa2_stuck_lock_sec", 45.0)
+        self.declare_parameter("cfpa2_stuck_min_motion_m", 0.20)
+        self.declare_parameter("cfpa2_stuck_blacklist_sec", 60.0)
+        self.declare_parameter("cfpa2_close_stop_radius_m", 0.35)
+        self.declare_parameter("cfpa2_close_stop_speed_epsilon", 0.02)
+        self.declare_parameter("cfpa2_space_time_enabled", True)
+        self.declare_parameter("cfpa2_space_time_horizon_sec", 5.0)
+        self.declare_parameter("cfpa2_space_time_dt_sec", 0.40)
+        self.declare_parameter("cfpa2_space_time_safety_radius_m", 0.45)
+        self.declare_parameter("cfpa2_space_time_waypoint_lookahead_m", 0.9)
+        self.declare_parameter("cfpa2_space_time_window_margin_m", 3.0)
+        self.declare_parameter("cfpa2_space_time_max_expansions", 12000)
+        self.declare_parameter("cfpa2_space_time_assumed_speed_mps", 0.25)
+        self.declare_parameter("cfpa2_space_time_max_speed_mps", 0.60)
+        self.declare_parameter("cfpa2_frontier_min_cluster_area_m2", 0.20)
         self.declare_parameter("communication_timeout_sec", 6.0)
         self.declare_parameter("prediction_horizon_sec", 4.0)
         self.declare_parameter("pursuit_weight", 2.0)
@@ -149,6 +155,8 @@ class MTareCoordinator(Node):
         self.declare_parameter("perf_min_samples", 20)
         self.declare_parameter("perf_tick_warn_p95_ms", 150.0)
         self.declare_parameter("perf_cpu_warn_pct", 15.0)
+        self.declare_parameter("debug_no_goal_logging", True)
+        self.declare_parameter("debug_no_goal_log_interval_sec", 2.0)
 
         self.namespaces = [str(x) for x in self.get_parameter("namespaces").value]
         self.publish_rate = max(0.2, float(self.get_parameter("publish_rate").value))
@@ -182,11 +190,11 @@ class MTareCoordinator(Node):
         self.min_assign_distance = max(0.0, float(self.get_parameter("min_assign_distance").value))
 
         self.algorithm_mode = str(self.get_parameter("algorithm_mode").value).strip().lower()
-        if self.algorithm_mode not in {"legacy", "committed", "mtare", "cfpa2", "mui_tare"}:
+        if self.algorithm_mode != "cfpa2":
             self.get_logger().warn(
-                f"Unknown algorithm_mode='{self.algorithm_mode}', falling back to mtare"
+                f"CFPA2Coordinator forcing algorithm_mode=cfpa2 (received '{self.algorithm_mode}')."
             )
-            self.algorithm_mode = "mtare"
+            self.algorithm_mode = "cfpa2"
 
         self.goal_lock_sec = max(0.0, float(self.get_parameter("goal_lock_sec").value))
         self.progress_window_sec = max(0.5, float(self.get_parameter("progress_window_sec").value))
@@ -212,6 +220,48 @@ class MTareCoordinator(Node):
         self.cfpa2_w_sw = max(0.0, float(self.get_parameter("cfpa2_w_sw").value))
         self.cfpa2_lambda_overlap = max(0.0, float(self.get_parameter("cfpa2_lambda_overlap").value))
         self.cfpa2_sigma_overlap_m = max(0.0, float(self.get_parameter("cfpa2_sigma_overlap_m").value))
+        self.cfpa2_stuck_lock_sec = max(0.0, float(self.get_parameter("cfpa2_stuck_lock_sec").value))
+        self.cfpa2_stuck_min_motion_m = max(
+            0.0, float(self.get_parameter("cfpa2_stuck_min_motion_m").value)
+        )
+        self.cfpa2_stuck_blacklist_sec = max(
+            0.0, float(self.get_parameter("cfpa2_stuck_blacklist_sec").value)
+        )
+        self.cfpa2_close_stop_radius_m = max(
+            0.0, float(self.get_parameter("cfpa2_close_stop_radius_m").value)
+        )
+        self.cfpa2_close_stop_speed_epsilon = max(
+            0.0, float(self.get_parameter("cfpa2_close_stop_speed_epsilon").value)
+        )
+        self.cfpa2_space_time_enabled = bool(self.get_parameter("cfpa2_space_time_enabled").value)
+        self.cfpa2_space_time_horizon_sec = max(
+            0.5, float(self.get_parameter("cfpa2_space_time_horizon_sec").value)
+        )
+        self.cfpa2_space_time_dt_sec = max(
+            0.05, float(self.get_parameter("cfpa2_space_time_dt_sec").value)
+        )
+        self.cfpa2_space_time_safety_radius_m = max(
+            0.0, float(self.get_parameter("cfpa2_space_time_safety_radius_m").value)
+        )
+        self.cfpa2_space_time_waypoint_lookahead_m = max(
+            0.1, float(self.get_parameter("cfpa2_space_time_waypoint_lookahead_m").value)
+        )
+        self.cfpa2_space_time_window_margin_m = max(
+            0.0, float(self.get_parameter("cfpa2_space_time_window_margin_m").value)
+        )
+        self.cfpa2_space_time_max_expansions = max(
+            1000, int(self.get_parameter("cfpa2_space_time_max_expansions").value)
+        )
+        self.cfpa2_space_time_assumed_speed_mps = max(
+            0.01, float(self.get_parameter("cfpa2_space_time_assumed_speed_mps").value)
+        )
+        self.cfpa2_space_time_max_speed_mps = max(
+            self.cfpa2_space_time_assumed_speed_mps,
+            float(self.get_parameter("cfpa2_space_time_max_speed_mps").value),
+        )
+        self.cfpa2_frontier_min_cluster_area_m2 = max(
+            0.0, float(self.get_parameter("cfpa2_frontier_min_cluster_area_m2").value)
+        )
         self.communication_timeout_sec = max(0.0, float(self.get_parameter("communication_timeout_sec").value))
         self.prediction_horizon_sec = max(0.0, float(self.get_parameter("prediction_horizon_sec").value))
         self.pursuit_weight = max(0.0, float(self.get_parameter("pursuit_weight").value))
@@ -243,6 +293,10 @@ class MTareCoordinator(Node):
         self.perf_min_samples = max(5, int(self.get_parameter("perf_min_samples").value))
         self.perf_tick_warn_p95_ms = max(0.0, float(self.get_parameter("perf_tick_warn_p95_ms").value))
         self.perf_cpu_warn_pct = max(0.0, float(self.get_parameter("perf_cpu_warn_pct").value))
+        self.debug_no_goal_logging = bool(self.get_parameter("debug_no_goal_logging").value)
+        self.debug_no_goal_log_interval_sec = max(
+            0.2, float(self.get_parameter("debug_no_goal_log_interval_sec").value)
+        )
 
         self.maps: dict[str, OccupancyGrid] = {}
         self.shared_map: Optional[OccupancyGrid] = None
@@ -270,14 +324,20 @@ class MTareCoordinator(Node):
         self.trajectory_history: dict[str, deque[tuple[float, float]]] = {
             ns: deque(maxlen=self.trajectory_max_points) for ns in self.namespaces
         }
+        self.goal_lock_start_xy: dict[str, Optional[tuple[float, float]]] = {
+            ns: None for ns in self.namespaces
+        }
+        self.cfpa2_last_stuck_event_ns: dict[str, int] = {ns: 0 for ns in self.namespaces}
 
         self._warned_missing_shared_map = False
         self._shared_map_fallback_active = False
         self._warned_cfpa2_two_robot_only = False
+        self._cfpa2_last_close_stop_log_ns = 0
         self._start_ns = self.get_clock().now().nanoseconds
         self._summary_interval_sec = 10.0
         self._last_summary_ns = 0
         self._last_prereq_warn_ns = 0
+        self._last_no_goal_debug_ns = 0
         self._tick_period_ms = 1000.0 / self.publish_rate
         self._perf_tick_durations_ms: deque[float] = deque(maxlen=self.perf_tick_window_size)
         self._last_perf_summary_ns = 0
@@ -323,6 +383,7 @@ class MTareCoordinator(Node):
             self.create_subscription(OccupancyGrid, self.shared_map_topic, self._shared_map_cb, 1)
 
         self.timer = self.create_timer(1.0 / self.publish_rate, self._tick)
+        self.get_logger().info("[planner_startup] cfpa2_coordinator initialized.")
         self.get_logger().info(
             f"Coordinator started for {self.namespaces} | mode={self.algorithm_mode} "
             f"beta={self.beta:.2f}, sensor_range={self.sensor_range:.2f}, "
@@ -339,6 +400,20 @@ class MTareCoordinator(Node):
             f"cfpa2_w_sw={self.cfpa2_w_sw:.2f}, "
             f"cfpa2_lambda_overlap={self.cfpa2_lambda_overlap:.2f}, "
             f"cfpa2_sigma_overlap_m={self.cfpa2_sigma_overlap_m:.2f}, "
+            f"cfpa2_stuck_lock_sec={self.cfpa2_stuck_lock_sec:.1f}, "
+            f"cfpa2_stuck_min_motion_m={self.cfpa2_stuck_min_motion_m:.2f}, "
+            f"cfpa2_stuck_blacklist_sec={self.cfpa2_stuck_blacklist_sec:.1f}, "
+            f"cfpa2_close_stop_radius_m={self.cfpa2_close_stop_radius_m:.2f}, "
+            f"cfpa2_space_time_enabled={self.cfpa2_space_time_enabled} "
+            f"cfpa2_space_time_horizon_sec={self.cfpa2_space_time_horizon_sec:.1f} "
+            f"cfpa2_space_time_dt_sec={self.cfpa2_space_time_dt_sec:.2f} "
+            f"cfpa2_space_time_safety_radius_m={self.cfpa2_space_time_safety_radius_m:.2f} "
+            f"cfpa2_space_time_waypoint_lookahead_m={self.cfpa2_space_time_waypoint_lookahead_m:.2f} "
+            f"cfpa2_space_time_window_margin_m={self.cfpa2_space_time_window_margin_m:.1f} "
+            f"cfpa2_space_time_max_expansions={self.cfpa2_space_time_max_expansions} "
+            f"cfpa2_space_time_assumed_speed_mps={self.cfpa2_space_time_assumed_speed_mps:.2f} "
+            f"cfpa2_space_time_max_speed_mps={self.cfpa2_space_time_max_speed_mps:.2f} "
+            f"cfpa2_frontier_min_cluster_area_m2={self.cfpa2_frontier_min_cluster_area_m2:.2f} "
             f"communication_timeout_sec={self.communication_timeout_sec:.2f}, "
             f"prediction_horizon_sec={self.prediction_horizon_sec:.2f}, "
             f"pursuit_weight={self.pursuit_weight:.2f}, "
@@ -436,25 +511,70 @@ class MTareCoordinator(Node):
         w = int(msg.info.width)
         h = int(msg.info.height)
         data = msg.data
+        res = max(1e-6, float(msg.info.resolution))
         out: list[tuple[float, float]] = []
-        s = self.frontier_stride
+        s = max(1, self.frontier_stride)
+        min_area_m2 = self.cfpa2_frontier_min_cluster_area_m2
+        neighbor8 = ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, 1), (1, -1), (-1, -1))
 
-        for gy in range(1, h - 1, s):
+        frontier_mask = [False] * (w * h)
+        frontier_cells: list[tuple[int, int]] = []
+        for gy in range(1, h - 1):
             row = gy * w
-            for gx in range(1, w - 1, s):
+            for gx in range(1, w - 1):
                 idx = row + gx
                 if not self._is_free(data, idx):
                     continue
                 found_unknown = False
-                for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, 1), (1, -1), (-1, -1)):
+                for dx, dy in neighbor8:
                     nidx = (gy + dy) * w + (gx + dx)
                     if self._is_unknown(data, nidx):
                         found_unknown = True
                         break
-                if found_unknown:
-                    out.append(self._grid_to_world(msg, gx, gy))
-                    if len(out) >= self.max_targets:
-                        return out
+                if not found_unknown:
+                    continue
+                frontier_mask[idx] = True
+                frontier_cells.append((gx, gy))
+
+        if not frontier_cells:
+            return out
+
+        visited = [False] * (w * h)
+        q: deque[tuple[int, int]] = deque()
+        for seed_x, seed_y in frontier_cells:
+            seed_idx = self._grid_index(seed_x, seed_y, w)
+            if visited[seed_idx] or not frontier_mask[seed_idx]:
+                continue
+
+            visited[seed_idx] = True
+            q.append((seed_x, seed_y))
+            component: list[tuple[int, int]] = []
+
+            while q:
+                cx, cy = q.popleft()
+                component.append((cx, cy))
+
+                for dx, dy in neighbor8:
+                    nx = cx + dx
+                    ny = cy + dy
+                    if nx <= 0 or ny <= 0 or nx >= (w - 1) or ny >= (h - 1):
+                        continue
+                    nidx = self._grid_index(nx, ny, w)
+                    if visited[nidx] or not frontier_mask[nidx]:
+                        continue
+                    visited[nidx] = True
+                    q.append((nx, ny))
+
+            cluster_area_m2 = len(component) * res * res
+            if cluster_area_m2 + 1e-9 < min_area_m2:
+                continue
+
+            for i, (gx, gy) in enumerate(component):
+                if (i % s) != 0:
+                    continue
+                out.append(self._grid_to_world(msg, gx, gy))
+                if len(out) >= self.max_targets:
+                    return out
         return out
 
     def _distance_transform(self, msg: OccupancyGrid, start_w: tuple[float, float]) -> dict[int, int]:
@@ -644,6 +764,9 @@ class MTareCoordinator(Node):
         if prev is None or math.hypot(prev[0] - goal[0], prev[1] - goal[1]) > 1e-6:
             self.last_goal_set_time_ns[ns] = now_ns
             self.goal_progress_samples[ns].clear()
+            self.goal_lock_start_xy[ns] = self._robot_xy(ns) if ns in self.odoms else None
+        elif self.goal_lock_start_xy.get(ns) is None and ns in self.odoms:
+            self.goal_lock_start_xy[ns] = self._robot_xy(ns)
         self.last_goal[ns] = goal
 
     def _set_policy_reason(self, ns: str, reason: str) -> None:
@@ -771,6 +894,69 @@ class MTareCoordinator(Node):
         self.get_logger().info(
             f"ASSIGN step[{self.algorithm_mode}]: targets={targets_total} | " + " | ".join(parts)
         )
+
+    def _map_cell_stats(self, msg: OccupancyGrid) -> tuple[int, int, int]:
+        free_n = 0
+        occ_n = 0
+        unknown_n = 0
+        for value in msg.data:
+            v = int(value)
+            if v == self.unknown_value:
+                unknown_n += 1
+            elif v >= self.occ_thresh:
+                occ_n += 1
+            elif v == self.free_value:
+                free_n += 1
+            else:
+                unknown_n += 1
+        return (free_n, occ_n, unknown_n)
+
+    def _should_log_no_goal_debug(self, now_ns: int) -> bool:
+        if not self.debug_no_goal_logging:
+            return False
+        if (now_ns - self._last_no_goal_debug_ns) < int(self.debug_no_goal_log_interval_sec * 1e9):
+            return False
+        self._last_no_goal_debug_ns = now_ns
+        return True
+
+    def _log_no_goal_debug(
+        self,
+        *,
+        now_ns: int,
+        reason: str,
+        planning_map: OccupancyGrid,
+        per_ns_targets: dict[str, list[tuple[float, float]]],
+        dist_maps: Optional[dict[str, dict[int, int]]] = None,
+        utilities_sizes: Optional[dict[str, int]] = None,
+        candidate_goals: Optional[dict[str, tuple[float, float]]] = None,
+        per_ns_assigned: Optional[dict[str, tuple[float, float]]] = None,
+    ) -> None:
+        if not self._should_log_no_goal_debug(now_ns):
+            return
+
+        p_free, p_occ, p_unk = self._map_cell_stats(planning_map)
+        parts = [
+            f"NO_GOAL[{reason}]",
+            f"planning_map(free={p_free} occ={p_occ} unk={p_unk})",
+            f"use_shared_map={self.use_shared_map}",
+            f"shared_map_ready={self.shared_map is not None}",
+        ]
+        for ns in self.namespaces:
+            local_map = self.maps.get(ns)
+            local_stats = "no_map"
+            if local_map is not None:
+                l_free, l_occ, l_unk = self._map_cell_stats(local_map)
+                local_stats = f"free={l_free} occ={l_occ} unk={l_unk}"
+            frontier_n = len(per_ns_targets.get(ns, []))
+            dist_n = -1 if dist_maps is None else len(dist_maps.get(ns, {}))
+            util_n = -1 if utilities_sizes is None else int(utilities_sizes.get(ns, 0))
+            has_candidate = False if candidate_goals is None else (ns in candidate_goals)
+            has_assigned = False if per_ns_assigned is None else (ns in per_ns_assigned)
+            parts.append(
+                f"{ns}(fronts={frontier_n} dist_cells={dist_n} utils={util_n} "
+                f"candidate={int(has_candidate)} assigned={int(has_assigned)} local={local_stats})"
+            )
+        self.get_logger().warn(" | ".join(parts))
 
     @staticmethod
     def _percentile(sorted_values: list[float], quantile: float) -> float:
@@ -1122,6 +1308,430 @@ class MTareCoordinator(Node):
         d2 = (dx * dx) + (dy * dy)
         return math.exp(-d2 / (2.0 * sigma * sigma))
 
+    def _cfpa2_momentum(self, ns: str) -> float:
+        vx, vy = self.odom_velocity_xy.get(ns, (0.0, 0.0))
+        return math.hypot(float(vx), float(vy))
+
+    def _find_nearest_free_cell(
+        self,
+        map_msg: OccupancyGrid,
+        cell: tuple[int, int],
+        search_radius_cells: int,
+    ) -> Optional[tuple[int, int]]:
+        w = int(map_msg.info.width)
+        h = int(map_msg.info.height)
+        data = map_msg.data
+        gx, gy = cell
+        if gx < 0 or gy < 0 or gx >= w or gy >= h:
+            return None
+        if self._is_free(data, self._grid_index(gx, gy, w)):
+            return (gx, gy)
+
+        best: Optional[tuple[int, int]] = None
+        best_d2 = float("inf")
+        for r in range(1, search_radius_cells + 1):
+            for dy in range(-r, r + 1):
+                ny = gy + dy
+                if ny < 0 or ny >= h:
+                    continue
+                for dx in range(-r, r + 1):
+                    nx = gx + dx
+                    if nx < 0 or nx >= w:
+                        continue
+                    nidx = self._grid_index(nx, ny, w)
+                    if not self._is_free(data, nidx):
+                        continue
+                    d2 = (nx - gx) * (nx - gx) + (ny - gy) * (ny - gy)
+                    if d2 < best_d2:
+                        best_d2 = d2
+                        best = (nx, ny)
+            if best is not None:
+                break
+        return best
+
+    @staticmethod
+    def _dilate_grid_cell(
+        gx: int,
+        gy: int,
+        radius_cells: int,
+        w: int,
+        h: int,
+    ) -> list[tuple[int, int]]:
+        if radius_cells <= 0:
+            return [(gx, gy)]
+        out: list[tuple[int, int]] = []
+        r2 = radius_cells * radius_cells
+        for dy in range(-radius_cells, radius_cells + 1):
+            ny = gy + dy
+            if ny < 0 or ny >= h:
+                continue
+            for dx in range(-radius_cells, radius_cells + 1):
+                nx = gx + dx
+                if nx < 0 or nx >= w:
+                    continue
+                if (dx * dx + dy * dy) > r2:
+                    continue
+                out.append((nx, ny))
+        return out
+
+    def _predict_other_robot_blocks(
+        self,
+        *,
+        map_msg: OccupancyGrid,
+        ns: str,
+        planned_goals: dict[str, tuple[float, float]],
+        steps: int,
+        dt_sec: float,
+        safety_radius_cells: int,
+    ) -> list[set[tuple[int, int]]]:
+        blocked_by_t: list[set[tuple[int, int]]] = [set() for _ in range(steps + 1)]
+        w = int(map_msg.info.width)
+        h = int(map_msg.info.height)
+
+        for other in self.namespaces:
+            if other == ns or other not in self.odoms:
+                continue
+
+            ox, oy = self._robot_xy(other)
+            target = planned_goals.get(other) or self.last_goal.get(other) or (ox, oy)
+            tx, ty = float(target[0]), float(target[1])
+
+            dx = tx - ox
+            dy = ty - oy
+            dist = math.hypot(dx, dy)
+            dir_x = (dx / dist) if dist > 1e-6 else 0.0
+            dir_y = (dy / dist) if dist > 1e-6 else 0.0
+
+            raw_speed = math.hypot(*self.odom_velocity_xy.get(other, (0.0, 0.0)))
+            speed = raw_speed if raw_speed > 0.05 else self.cfpa2_space_time_assumed_speed_mps
+            speed = max(self.cfpa2_space_time_assumed_speed_mps, min(speed, self.cfpa2_space_time_max_speed_mps))
+
+            for k in range(steps + 1):
+                t = dt_sec * k
+                travel = min(dist, speed * t)
+                px = ox + dir_x * travel
+                py = oy + dir_y * travel
+                g = self._world_to_grid(map_msg, px, py)
+                if g is None:
+                    continue
+                for cell in self._dilate_grid_cell(g[0], g[1], safety_radius_cells, w, h):
+                    blocked_by_t[k].add(cell)
+
+        return blocked_by_t
+
+    def _space_time_astar_cells(
+        self,
+        *,
+        ns: str,
+        map_msg: OccupancyGrid,
+        final_goal: tuple[float, float],
+        planned_goals: dict[str, tuple[float, float]],
+    ) -> Optional[list[tuple[int, int]]]:
+        if ns not in self.odoms:
+            return None
+
+        res = max(1e-6, float(map_msg.info.resolution))
+        w = int(map_msg.info.width)
+        h = int(map_msg.info.height)
+        data = map_msg.data
+
+        start_w = self._robot_xy(ns)
+        start = self._world_to_grid(map_msg, start_w[0], start_w[1])
+        goal = self._world_to_grid(map_msg, final_goal[0], final_goal[1])
+        if start is None or goal is None:
+            return None
+
+        near_search = max(4, int(math.ceil(0.8 / res)))
+        start = self._find_nearest_free_cell(map_msg, start, near_search)
+        goal = self._find_nearest_free_cell(map_msg, goal, near_search)
+        if start is None or goal is None:
+            return None
+
+        steps = max(2, int(math.ceil(self.cfpa2_space_time_horizon_sec / self.cfpa2_space_time_dt_sec)))
+        safety_cells = max(0, int(math.ceil(self.cfpa2_space_time_safety_radius_m / res)))
+        blocked_by_t = self._predict_other_robot_blocks(
+            map_msg=map_msg,
+            ns=ns,
+            planned_goals=planned_goals,
+            steps=steps,
+            dt_sec=self.cfpa2_space_time_dt_sec,
+            safety_radius_cells=safety_cells,
+        )
+
+        margin_cells = max(
+            4,
+            int(
+                math.ceil(
+                    (self.cfpa2_space_time_window_margin_m + self.cfpa2_space_time_max_speed_mps * self.cfpa2_space_time_horizon_sec)
+                    / res
+                )
+            ),
+        )
+        x_min = max(0, min(start[0], goal[0]) - margin_cells)
+        x_max = min(w - 1, max(start[0], goal[0]) + margin_cells)
+        y_min = max(0, min(start[1], goal[1]) - margin_cells)
+        y_max = min(h - 1, max(start[1], goal[1]) + margin_cells)
+
+        def in_window(x: int, y: int) -> bool:
+            return x_min <= x <= x_max and y_min <= y <= y_max
+
+        sx, sy = start
+        gx, gy = goal
+        if not in_window(sx, sy) or not in_window(gx, gy):
+            return None
+
+        neighbors = (
+            (1, 0, 1.0),
+            (-1, 0, 1.0),
+            (0, 1, 1.0),
+            (0, -1, 1.0),
+            (0, 0, 1.05),  # wait
+        )
+
+        start_key = (sx, sy, 0)
+        open_heap: list[tuple[float, float, int, int, int]] = []
+        heapq.heappush(open_heap, (abs(sx - gx) + abs(sy - gy), 0.0, sx, sy, 0))
+        g_score: dict[tuple[int, int, int], float] = {start_key: 0.0}
+        parent: dict[tuple[int, int, int], tuple[int, int, int]] = {}
+
+        expansions = 0
+        goal_key: Optional[tuple[int, int, int]] = None
+        while open_heap and expansions < self.cfpa2_space_time_max_expansions:
+            _f, cur_g, x, y, t = heapq.heappop(open_heap)
+            key = (x, y, t)
+            if cur_g > g_score.get(key, float("inf")) + 1e-9:
+                continue
+            expansions += 1
+
+            if (x, y) == (gx, gy):
+                goal_key = key
+                break
+            if t >= steps:
+                continue
+
+            nt = t + 1
+            for dx, dy, move_cost in neighbors:
+                nx = x + dx
+                ny = y + dy
+                if not in_window(nx, ny):
+                    continue
+                nidx = self._grid_index(nx, ny, w)
+                if not self._is_free(data, nidx):
+                    continue
+                if (nx, ny) in blocked_by_t[nt]:
+                    continue
+                # Avoid swap-like crossing through a dynamic obstacle trajectory.
+                if (nx, ny) in blocked_by_t[t] and (x, y) in blocked_by_t[nt]:
+                    continue
+
+                nkey = (nx, ny, nt)
+                ng = cur_g + move_cost
+                if ng >= g_score.get(nkey, float("inf")) - 1e-9:
+                    continue
+                g_score[nkey] = ng
+                parent[nkey] = key
+                h_manhattan = abs(nx - gx) + abs(ny - gy)
+                heapq.heappush(open_heap, (ng + h_manhattan, ng, nx, ny, nt))
+
+        if goal_key is None:
+            return None
+
+        path: list[tuple[int, int]] = []
+        cur = goal_key
+        while True:
+            path.append((cur[0], cur[1]))
+            if cur == start_key:
+                break
+            cur = parent[cur]
+        path.reverse()
+        return path
+
+    def _cfpa2_space_time_waypoint(
+        self,
+        *,
+        ns: str,
+        map_msg: OccupancyGrid,
+        final_goal: tuple[float, float],
+        planned_goals: dict[str, tuple[float, float]],
+    ) -> Optional[tuple[float, float]]:
+        if not self.cfpa2_space_time_enabled or ns not in self.odoms:
+            return None
+
+        rx, ry = self._robot_xy(ns)
+        if math.hypot(final_goal[0] - rx, final_goal[1] - ry) <= max(self.min_assign_distance, 0.20):
+            return None
+
+        path_cells = self._space_time_astar_cells(
+            ns=ns,
+            map_msg=map_msg,
+            final_goal=final_goal,
+            planned_goals=planned_goals,
+        )
+        if not path_cells or len(path_cells) < 2:
+            return None
+
+        res = float(map_msg.info.resolution)
+        lookahead_m = max(res, self.cfpa2_space_time_waypoint_lookahead_m)
+        traveled_m = 0.0
+        chosen = path_cells[-1]
+        prev = path_cells[0]
+        for cell in path_cells[1:]:
+            traveled_m += math.hypot(cell[0] - prev[0], cell[1] - prev[1]) * res
+            prev = cell
+            if traveled_m >= lookahead_m:
+                chosen = cell
+                break
+
+        return self._grid_to_world(map_msg, chosen[0], chosen[1])
+
+    def _cfpa2_best_available_goal(
+        self,
+        *,
+        ns: str,
+        now_ns: int,
+        utilities: dict[tuple[float, float], float],
+        exclude_goal: Optional[tuple[float, float]] = None,
+        fallback_targets: Optional[list[tuple[float, float]]] = None,
+    ) -> Optional[tuple[float, float]]:
+        # TODO(maybe): Move fallback target prioritization into cfpa2_demo.core for reuse.
+        excluded_key = self._goal_key(exclude_goal) if exclude_goal is not None else None
+
+        for goal, _score in sorted(utilities.items(), key=lambda kv: kv[1], reverse=True):
+            if excluded_key is not None and self._goal_key(goal) == excluded_key:
+                continue
+            if self._goal_too_close(ns, goal):
+                continue
+            if self._is_blacklisted(ns, goal, now_ns):
+                continue
+            return goal
+
+        if fallback_targets:
+            for goal in sorted(fallback_targets, key=lambda g: self._distance_robot_to_goal(ns, g)):
+                if excluded_key is not None and self._goal_key(goal) == excluded_key:
+                    continue
+                if self._goal_too_close(ns, goal):
+                    continue
+                if self._is_blacklisted(ns, goal, now_ns):
+                    continue
+                return goal
+        return None
+
+    def _maybe_force_cfpa2_stuck_recovery(
+        self,
+        *,
+        ns: str,
+        now_ns: int,
+        utilities: dict[tuple[float, float], float],
+        fallback_targets: list[tuple[float, float]],
+    ) -> Optional[tuple[float, float]]:
+        if self.cfpa2_stuck_lock_sec <= 0.0 or self.cfpa2_stuck_blacklist_sec <= 0.0:
+            return None
+        if ns not in self.odoms:
+            return None
+
+        current_goal = self.last_goal.get(ns)
+        if current_goal is None:
+            return None
+        if self._goal_too_close(ns, current_goal):
+            return None
+
+        lock_start_ns = self.last_goal_set_time_ns.get(ns, 0)
+        if lock_start_ns <= 0:
+            return None
+        lock_age_sec = max(0.0, (now_ns - lock_start_ns) / 1e9)
+        if lock_age_sec < self.cfpa2_stuck_lock_sec:
+            return None
+
+        lock_start_xy = self.goal_lock_start_xy.get(ns)
+        if lock_start_xy is None:
+            self.goal_lock_start_xy[ns] = self._robot_xy(ns)
+            return None
+
+        rx, ry = self._robot_xy(ns)
+        moved_dist = math.hypot(rx - lock_start_xy[0], ry - lock_start_xy[1])
+        if moved_dist >= self.cfpa2_stuck_min_motion_m:
+            return None
+
+        current_key = self._goal_key(current_goal)
+        until_ns = now_ns + int(self.cfpa2_stuck_blacklist_sec * 1e9)
+        self.goal_blacklist_until_ns[ns][current_key] = max(
+            self.goal_blacklist_until_ns[ns].get(current_key, 0),
+            until_ns,
+        )
+
+        alternative = self._cfpa2_best_available_goal(
+            ns=ns,
+            now_ns=now_ns,
+            utilities=utilities,
+            exclude_goal=current_goal,
+            fallback_targets=fallback_targets,
+        )
+
+        last_event_ns = self.cfpa2_last_stuck_event_ns.get(ns, 0)
+        if alternative is not None:
+            if (now_ns - last_event_ns) > int(1e9):
+                self.get_logger().warn(
+                    f"{ns}: CFPA2 stuck-recovery triggered (lock={lock_age_sec:.1f}s, moved={moved_dist:.2f}m). "
+                    f"Blacklisted ({current_goal[0]:.2f},{current_goal[1]:.2f}) for {self.cfpa2_stuck_blacklist_sec:.1f}s "
+                    f"and switching to ({alternative[0]:.2f},{alternative[1]:.2f})."
+                )
+            self.cfpa2_last_stuck_event_ns[ns] = now_ns
+            self._set_policy_reason(ns, "switch/cfpa2_stuck_recover")
+            return alternative
+
+        if (now_ns - last_event_ns) > int(2e9):
+            self.get_logger().warn(
+                f"{ns}: CFPA2 stuck-recovery blacklisted current goal but found no alternative frontier."
+            )
+            self.cfpa2_last_stuck_event_ns[ns] = now_ns
+        self._set_policy_reason(ns, "hold/cfpa2_stuck_no_alternative")
+        return None
+
+    def _apply_cfpa2_proximity_stop(
+        self,
+        *,
+        candidate_goals: dict[str, tuple[float, float]],
+        assignment_scores: dict[str, float],
+        now_ns: int,
+    ) -> set[str]:
+        if self.cfpa2_close_stop_radius_m <= 0.0 or len(self.namespaces) != 2:
+            return set()
+
+        ns_a, ns_b = self.namespaces[0], self.namespaces[1]
+        if ns_a not in self.odoms or ns_b not in self.odoms:
+            return set()
+
+        ax, ay = self._robot_xy(ns_a)
+        bx, by = self._robot_xy(ns_b)
+        if math.hypot(ax - bx, ay - by) >= self.cfpa2_close_stop_radius_m:
+            return set()
+
+        p_a = self._cfpa2_momentum(ns_a)
+        p_b = self._cfpa2_momentum(ns_b)
+        eps = self.cfpa2_close_stop_speed_epsilon
+        if p_a < (p_b - eps):
+            stop_ns = ns_a
+        elif p_b < (p_a - eps):
+            stop_ns = ns_b
+        else:
+            # Deterministic tie-break keeps one robot moving.
+            stop_ns = ns_b
+
+        sx, sy = self._robot_xy(stop_ns)
+        candidate_goals[stop_ns] = (sx, sy)
+        assignment_scores[stop_ns] = -1e6
+        self._set_policy_reason(stop_ns, "hold/cfpa2_close_low_momentum_stop")
+
+        if (now_ns - self._cfpa2_last_close_stop_log_ns) > int(1e9):
+            other_ns = ns_b if stop_ns == ns_a else ns_a
+            self.get_logger().warn(
+                f"CFPA2 close-range arbitration: d<{self.cfpa2_close_stop_radius_m:.2f}m, "
+                f"{stop_ns} momentum={self._cfpa2_momentum(stop_ns):.3f} < "
+                f"{other_ns} momentum={self._cfpa2_momentum(other_ns):.3f}; forcing {stop_ns} stop."
+            )
+            self._cfpa2_last_close_stop_log_ns = now_ns
+        return {stop_ns}
+
     def _exploration_utility(
         self,
         *,
@@ -1470,6 +2080,12 @@ class MTareCoordinator(Node):
             return
 
         if not targets:
+            self._log_no_goal_debug(
+                now_ns=now_ns,
+                reason="no_frontiers_after_extract",
+                planning_map=planning_map,
+                per_ns_targets=per_ns_targets,
+            )
             return
 
         dist_maps = {}
@@ -1522,6 +2138,21 @@ class MTareCoordinator(Node):
                     if score > -1e17:
                         utilities_b[goal] = score
 
+            if not utilities_a and not utilities_b:
+                self._log_no_goal_debug(
+                    now_ns=now_ns,
+                    reason="cfpa2_no_reachable_utilities",
+                    planning_map=planning_map,
+                    per_ns_targets=per_ns_targets,
+                    dist_maps=dist_maps,
+                    utilities_sizes={ns_a: len(utilities_a), ns_b: len(utilities_b)},
+                )
+
+            utilities_by_ns: dict[str, dict[tuple[float, float], float]] = {
+                ns_a: utilities_a,
+                ns_b: utilities_b,
+            }
+
             candidate_goals: dict[str, tuple[float, float]] = {}
             assignment_scores: dict[str, float] = {}
             best_joint = -1e18
@@ -1566,6 +2197,28 @@ class MTareCoordinator(Node):
                     assignment_scores[best_single_ns] = best_single_score
                     self._set_policy_reason(best_single_ns, "switch/cfpa2_fallback_single")
 
+            forced_switch_namespaces: set[str] = set()
+            for ns in self.namespaces:
+                forced_goal = self._maybe_force_cfpa2_stuck_recovery(
+                    ns=ns,
+                    now_ns=now_ns,
+                    utilities=utilities_by_ns.get(ns, {}),
+                    fallback_targets=per_ns_targets.get(ns, []),
+                )
+                if forced_goal is None:
+                    continue
+                candidate_goals[ns] = forced_goal
+                assignment_scores[ns] = utilities_by_ns.get(ns, {}).get(
+                    forced_goal, assignment_scores.get(ns, 0.0)
+                )
+                forced_switch_namespaces.add(ns)
+
+            forced_stop_namespaces = self._apply_cfpa2_proximity_stop(
+                candidate_goals=candidate_goals,
+                assignment_scores=assignment_scores,
+                now_ns=now_ns,
+            )
+
             per_ns_assigned: dict[str, tuple[float, float]] = {}
             for ns in self.namespaces:
                 candidate = candidate_goals.get(ns)
@@ -1574,18 +2227,54 @@ class MTareCoordinator(Node):
                     if held is None:
                         self._set_policy_reason(ns, "hold/cfpa2_no_candidate")
                         continue
-                    self._set_policy_reason(ns, "hold/cfpa2_keep_previous")
-                    goal = held
-                else:
-                    goal = self._apply_switch_hysteresis(
-                        ns,
-                        candidate,
-                        assignment_scores.get(ns, 0.0),
-                    )
+                    if self._is_blacklisted(ns, held, now_ns):
+                        fallback = self._cfpa2_best_available_goal(
+                            ns=ns,
+                            now_ns=now_ns,
+                            utilities=utilities_by_ns.get(ns, {}),
+                            exclude_goal=held,
+                            fallback_targets=per_ns_targets.get(ns, []),
+                        )
+                        if fallback is not None:
+                            candidate = fallback
+                            assignment_scores[ns] = utilities_by_ns.get(ns, {}).get(fallback, 0.0)
+                            forced_switch_namespaces.add(ns)
+                            self._set_policy_reason(ns, "switch/cfpa2_blacklist_fallback")
+                        else:
+                            # If current goal is blacklisted and no alternative exists, hold position.
+                            candidate = self._robot_xy(ns)
+                            forced_stop_namespaces.add(ns)
+                            self._set_policy_reason(ns, "hold/cfpa2_blacklisted_stop")
+                    else:
+                        self._set_policy_reason(ns, "hold/cfpa2_keep_previous")
+                        goal = held
+                if candidate is not None:
+                    if ns in forced_switch_namespaces or ns in forced_stop_namespaces:
+                        goal = candidate
+                    else:
+                        goal = self._apply_switch_hysteresis(
+                            ns,
+                            candidate,
+                            assignment_scores.get(ns, 0.0),
+                        )
 
                 self._set_active_goal(ns, goal, now_ns)
                 publish_map = self.maps.get(ns, planning_map)
-                self._publish_goal(ns, publish_map, goal)
+                publish_goal = goal
+                if (
+                    ns not in forced_stop_namespaces
+                    and publish_map is not None
+                    and self.cfpa2_space_time_enabled
+                ):
+                    st_waypoint = self._cfpa2_space_time_waypoint(
+                        ns=ns,
+                        map_msg=publish_map,
+                        final_goal=goal,
+                        planned_goals=candidate_goals,
+                    )
+                    if st_waypoint is not None:
+                        publish_goal = st_waypoint
+                self._publish_goal(ns, publish_map, publish_goal)
                 per_ns_assigned[ns] = goal
 
             per_ns_reachable: dict[str, int] = {}
@@ -1612,6 +2301,17 @@ class MTareCoordinator(Node):
                 per_ns_reachable=per_ns_reachable,
                 per_ns_assigned=per_ns_assigned,
             )
+            if not per_ns_assigned:
+                self._log_no_goal_debug(
+                    now_ns=now_ns,
+                    reason="cfpa2_no_assignment_published",
+                    planning_map=planning_map,
+                    per_ns_targets=per_ns_targets,
+                    dist_maps=dist_maps,
+                    utilities_sizes={ns_a: len(utilities_a), ns_b: len(utilities_b)},
+                    candidate_goals=candidate_goals,
+                    per_ns_assigned=per_ns_assigned,
+                )
             return
 
         if self.algorithm_mode == "cfpa2" and not self._warned_cfpa2_two_robot_only:
@@ -1855,7 +2555,7 @@ class MTareCoordinator(Node):
 
 def main(args=None) -> None:
     rclpy.init(args=args)
-    node = MTareCoordinator()
+    node = CFPA2Coordinator()
     try:
         rclpy.spin(node)
     except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):

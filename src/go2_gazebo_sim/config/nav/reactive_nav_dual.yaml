@@ -20,6 +20,15 @@
     avoidance_gain: 0.6
     turn_in_place_on_block: true
 
+    # Teammate-as-dynamic-obstacle avoidance
+    teammate_avoid_enabled: true
+    teammate_avoid_slow_radius_m: 0.90
+    teammate_avoid_stop_radius_m: 0.35
+    teammate_avoid_data_ttl_sec: 1.0
+    teammate_avoid_turn_gain: 1.4
+    teammate_avoid_max_turn_ratio: 0.70
+    teammate_avoid_min_speed_scale: 0.10
+
     # Disable scan-spin state machine, use planner escape + replan instead
     wall_scan_enabled: false
 

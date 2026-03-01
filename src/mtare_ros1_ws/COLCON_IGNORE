@@ -1,0 +1,2 @@
+# Ignore ROS1 catkin workspace when building this ROS2 colcon workspace.
+# Build mtare_ros1_ws separately with catkin tools.

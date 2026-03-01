@@ -189,7 +189,7 @@ Visualization Manager:
         Y: 0
         Z: 0
       Pose Color: 0; 255; 0
-      Pose Style: Arrows
+      Pose Style: None
       Radius: 0.03
       Shaft Diameter: 0.05
       Shaft Length: 0.1

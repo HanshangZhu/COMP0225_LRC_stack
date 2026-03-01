@@ -42,6 +42,10 @@ class ReactiveNav(Node):
         self.goal_frame_id = "world"
         self.stall_since_sec: float | None = None
         self.last_stall_warn_sec: float | None = None
+        self.teammate_x: float | None = None
+        self.teammate_y: float | None = None
+        self.teammate_speed: float = 0.0
+        self.last_teammate_odom_rx_sec: float | None = None
 
         self.declare_parameter("debug_stall_warn_sec", 6.0)
         self.declare_parameter("debug_stall_warn_period_sec", 6.0)
@@ -54,10 +58,39 @@ class ReactiveNav(Node):
         self.debug_stall_speed_threshold = max(0.0, float(self.get_parameter("debug_stall_speed_threshold").value))
         self.debug_stall_cmd_threshold = max(0.0, float(self.get_parameter("debug_stall_cmd_threshold").value))
 
+        self.declare_parameter("teammate_avoid_enabled", True)
+        self.declare_parameter("teammate_avoid_odom_topic", "")
+        self.declare_parameter("teammate_avoid_slow_radius_m", 0.90)
+        self.declare_parameter("teammate_avoid_stop_radius_m", 0.35)
+        self.declare_parameter("teammate_avoid_data_ttl_sec", 1.0)
+        self.declare_parameter("teammate_avoid_turn_gain", 1.4)
+        self.declare_parameter("teammate_avoid_max_turn_ratio", 0.70)
+        self.declare_parameter("teammate_avoid_min_speed_scale", 0.10)
+
+        self.teammate_avoid_enabled = bool(self.get_parameter("teammate_avoid_enabled").value)
+        self.teammate_avoid_odom_topic = str(self.get_parameter("teammate_avoid_odom_topic").value).strip()
+        self.teammate_avoid_slow_radius_m = max(
+            0.0, float(self.get_parameter("teammate_avoid_slow_radius_m").value)
+        )
+        self.teammate_avoid_stop_radius_m = max(
+            0.0, float(self.get_parameter("teammate_avoid_stop_radius_m").value)
+        )
+        self.teammate_avoid_data_ttl_sec = max(
+            0.1, float(self.get_parameter("teammate_avoid_data_ttl_sec").value)
+        )
+        self.teammate_avoid_turn_gain = max(0.0, float(self.get_parameter("teammate_avoid_turn_gain").value))
+        self.teammate_avoid_max_turn_ratio = max(
+            0.0, min(1.0, float(self.get_parameter("teammate_avoid_max_turn_ratio").value))
+        )
+        self.teammate_avoid_min_speed_scale = max(
+            0.0, min(1.0, float(self.get_parameter("teammate_avoid_min_speed_scale").value))
+        )
+
         self.create_subscription(PointStamped, "/way_point", self.goal_cb, 10)
         self.create_subscription(Odometry, "/odom/ground_truth", self.odom_cb, 10)
         self.create_subscription(LaserScan, "/scan", self.scan_cb, qos_profile_sensor_data)
         self.create_subscription(Int8, self.cfg.stop_topic, self.stop_cb, 10)
+        self._setup_teammate_subscription()
 
         self.cmd_pub = self.create_publisher(TwistStamped, "/cmd_vel_stamped", 10)
         self.replan_pub = self.create_publisher(Empty, self.cfg.frontier_replan_topic, 10)
@@ -138,8 +171,11 @@ class ReactiveNav(Node):
         msg = TwistStamped()
         msg.header.stamp = now.to_msg()
         msg.header.frame_id = "vehicle"
-        msg.twist.linear.x = float(result.linear_x)
-        msg.twist.angular.z = float(result.angular_z)
+        cmd_lin = float(result.linear_x)
+        cmd_ang = float(result.angular_z)
+        cmd_lin, cmd_ang, teammate_diag = self._apply_teammate_avoidance(now_sec, cmd_lin, cmd_ang)
+        msg.twist.linear.x = cmd_lin
+        msg.twist.angular.z = cmd_ang
         self.cmd_pub.publish(msg)
         self._publish_navigation_visuals(now.to_msg())
 
@@ -148,7 +184,7 @@ class ReactiveNav(Node):
         diag["pos"] = [round(self.robot_state.x, 2), round(self.robot_state.y, 2)]
         diag["yaw"] = round(math.degrees(self.robot_state.yaw), 1)
         diag["speed"] = round(self.robot_state.speed, 3)
-        diag["cmd"] = [round(result.linear_x, 3), round(result.angular_z, 3)]
+        diag["cmd"] = [round(cmd_lin, 3), round(cmd_ang, 3)]
         diag["stop_msgs"] = self.stop_msg_count
         diag["scan_age_sec"] = (
             None if self.last_scan_rx_sec is None else round(max(0.0, now_sec - self.last_scan_rx_sec), 2)
@@ -162,12 +198,87 @@ class ReactiveNav(Node):
         if self.last_goal_rx_sec is not None:
             diag["goal_age_sec"] = round(max(0.0, now_sec - self.last_goal_rx_sec), 2)
         diag["goal_seq"] = self.goal_msg_seq
+        if teammate_diag:
+            diag.update(teammate_diag)
 
         status_msg = String()
         status_msg.data = json.dumps(diag, separators=(",", ":"))
         self.status_pub.publish(status_msg)
-        self._maybe_log_stall_warning(now_sec, diag, result.linear_x, result.angular_z)
-        self._maybe_log_local_summary(now_sec, diag, result.linear_x, result.angular_z)
+        self._maybe_log_stall_warning(now_sec, diag, cmd_lin, cmd_ang)
+        self._maybe_log_local_summary(now_sec, diag, cmd_lin, cmd_ang)
+
+    def _setup_teammate_subscription(self) -> None:
+        if not self.teammate_avoid_enabled:
+            return
+        topic = self.teammate_avoid_odom_topic
+        if not topic:
+            ns = self.get_namespace().strip("/")
+            if ns == "robot_a":
+                topic = "/robot_b/odom/nav"
+            elif ns == "robot_b":
+                topic = "/robot_a/odom/nav"
+            else:
+                topic = ""
+        if not topic:
+            self.get_logger().warn("Teammate avoidance enabled but no teammate odom topic could be inferred.")
+            return
+        self.create_subscription(Odometry, topic, self.teammate_odom_cb, 10)
+        self.get_logger().info(f"Teammate avoidance enabled: odom_topic={topic}")
+
+    def teammate_odom_cb(self, msg: Odometry) -> None:
+        self.teammate_x = float(msg.pose.pose.position.x)
+        self.teammate_y = float(msg.pose.pose.position.y)
+        vx = float(msg.twist.twist.linear.x)
+        vy = float(msg.twist.twist.linear.y)
+        self.teammate_speed = math.hypot(vx, vy)
+        self.last_teammate_odom_rx_sec = self.get_clock().now().nanoseconds / 1e9
+
+    def _apply_teammate_avoidance(
+        self,
+        now_sec: float,
+        lin: float,
+        ang: float,
+    ) -> tuple[float, float, dict]:
+        diag: dict = {}
+        if not self.teammate_avoid_enabled:
+            return lin, ang, diag
+        if self.teammate_x is None or self.teammate_y is None or self.last_teammate_odom_rx_sec is None:
+            return lin, ang, diag
+
+        odom_age = now_sec - self.last_teammate_odom_rx_sec
+        if odom_age > self.teammate_avoid_data_ttl_sec:
+            diag["teammate_odom_age_sec"] = round(max(0.0, odom_age), 2)
+            return lin, ang, diag
+
+        dx = self.teammate_x - self.robot_state.x
+        dy = self.teammate_y - self.robot_state.y
+        dist = math.hypot(dx, dy)
+        diag["teammate_dist_m"] = round(dist, 3)
+
+        if dist >= self.teammate_avoid_slow_radius_m:
+            return lin, ang, diag
+
+        slow = max(self.teammate_avoid_stop_radius_m + 1e-3, self.teammate_avoid_slow_radius_m)
+        stop = min(self.teammate_avoid_stop_radius_m, slow - 1e-3)
+        if dist <= stop:
+            lin = 0.0
+            diag["teammate_stop"] = 1
+        else:
+            alpha = max(0.0, min(1.0, (dist - stop) / max(1e-6, slow - stop)))
+            speed_scale = max(self.teammate_avoid_min_speed_scale, alpha)
+            lin *= speed_scale
+            diag["teammate_speed_scale"] = round(speed_scale, 2)
+
+        away_angle = math.atan2(-dy, -dx)
+        away_err = self._wrap_angle(away_angle - self.robot_state.yaw)
+        steer = self.teammate_avoid_turn_gain * (2.0 / math.pi) * away_err * self.cfg.max_angular_speed
+        max_turn = self.teammate_avoid_max_turn_ratio * self.cfg.max_angular_speed
+        steer = max(-max_turn, min(max_turn, steer))
+        ang = ang + steer
+        ang = max(-self.cfg.max_angular_speed, min(self.cfg.max_angular_speed, ang))
+        diag["teammate_avoid_turn"] = round(steer, 3)
+        diag["teammate_avoid_active"] = 1
+        return lin, ang, diag
 
     def _maybe_log_stall_warning(self, now_sec: float, diag: dict, lin: float, ang: float) -> None:
         mode = str(diag.get("mode", ""))
@@ -295,6 +406,10 @@ class ReactiveNav(Node):
         siny = 2.0 * (w * z + x * y)
         cosy = 1.0 - 2.0 * (y * y + z * z)
         return math.atan2(siny, cosy)
+
+    @staticmethod
+    def _wrap_angle(a: float) -> float:
+        return math.atan2(math.sin(a), math.cos(a))
 
 
 def main(args=None) -> None:

@@ -168,6 +168,7 @@ def build_dual_robot_stack(
     standup_delay_sec=9.0,
     pose_guard_hold_sec=8.5,
     activate_controllers_on_spawn=True,
+    return_handles=False,
 ):
     tf_remaps = [("/tf", f"/{ns}/tf"), ("/tf_static", f"/{ns}/tf_static")]
 
@@ -380,7 +381,7 @@ def build_dual_robot_stack(
         output="screen",
     )
 
-    return [
+    stack_actions = [
         robot_state_publisher_node,
         quadruped_controller_node,
         state_estimator_node,
@@ -399,3 +400,11 @@ def build_dual_robot_stack(
             )
         ),
     ]
+    if return_handles:
+        return (
+            stack_actions,
+            {
+                "initial_pose_guard_node": initial_pose_guard_node,
+            },
+        )
+    return stack_actions
