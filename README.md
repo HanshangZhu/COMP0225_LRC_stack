@@ -1,4 +1,4 @@
-# COMP0225 QRC Challange Repo
+# COMP0225 QRC Group Project Repo
 
 Gazebo-first dual-Go2 exploration workspace (ROS 2 Humble), centered on CFPA2 + M-TARE style coordination.
 
