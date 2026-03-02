@@ -1,6 +1,6 @@
 # Context Handoff: "Goal Reached" Stagnation Debugging
 
-**Project Status:** Debugging multi-robot autonomous exploration (`cmu_exploration_ws`) for two Go2 robots in Gazebo (`go2_gazebo_sim`).
+**Project Status:** Debugging multi-robot autonomous exploration (`COMP0225_LRC_stack`) for two Go2 robots in Gazebo (`go2_gazebo_sim`).
 **Map:** `3.world` (corridors).
 **Robots:** `robot_a`, `robot_b` (namespaced).
 

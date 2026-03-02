@@ -21,8 +21,8 @@ That guide includes:
 ## Quick Start
 
 ```bash
-git clone --recurse-submodules <your_repo_url> cmu_exploration_ws
-cd cmu_exploration_ws
+git clone --recurse-submodules https://github.com/HanshangZhu/COMP0225_LRC_stack.git
+cd COMP0225_LRC_stack
 
 git submodule sync --recursive
 git submodule update --init --recursive

@@ -3,7 +3,7 @@
     max_linear_speed: 0.35
     max_angular_speed: 0.8
     control_rate: 15.0
-    startup_delay: 24.0
+    startup_delay: 2.0
     goal_tolerance: 0.20
     goal_reached_replan_cooldown_sec: 1.0
 
@@ -23,11 +23,11 @@
     # Teammate-as-dynamic-obstacle avoidance
     teammate_avoid_enabled: true
     teammate_avoid_slow_radius_m: 0.90
-    teammate_avoid_stop_radius_m: 0.35
+    teammate_avoid_stop_radius_m: 0.42
     teammate_avoid_data_ttl_sec: 1.0
-    teammate_avoid_turn_gain: 1.4
-    teammate_avoid_max_turn_ratio: 0.70
-    teammate_avoid_min_speed_scale: 0.10
+    teammate_avoid_turn_gain: 1.55
+    teammate_avoid_max_turn_ratio: 0.75
+    teammate_avoid_min_speed_scale: 0.08
 
     # Disable scan-spin state machine, use planner escape + replan instead
     wall_scan_enabled: false

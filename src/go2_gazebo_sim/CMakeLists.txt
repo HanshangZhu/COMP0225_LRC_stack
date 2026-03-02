@@ -38,6 +38,7 @@ install(PROGRAMS
   scripts/robot_status_monitor.py
   scripts/odom_comparison.py
   scripts/slam_odom_relay.py
+  scripts/shared_map_fuser.py
   scripts/pointcloud_adapter.py
   scripts/initial_pose_guard.py
   scripts/multi_robot_goal_assigner.py

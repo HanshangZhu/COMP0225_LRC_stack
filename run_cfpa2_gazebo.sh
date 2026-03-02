@@ -66,11 +66,11 @@ DEFAULT_LAUNCH_ARGS=(
   "mtare_teammate_stale_ttl_sec:=120.0"
 
   # CFPA2 frontier utility weights.
-  "cfpa2_w_ig:=1.1" # information gain()
+  "cfpa2_w_ig:=1.2" # information gain()
   "cfpa2_w_c:=0.6"
   "cfpa2_w_sw:=0.2" 
-  "cfpa2_lambda_overlap:=4.0"
-  "cfpa2_sigma_overlap_m:=1.0"
+  "cfpa2_lambda_overlap:=6.0"
+  "cfpa2_sigma_overlap_m:=1.5"
 
   # CFPA2 stuck recovery + close-range arbitration.
   "cfpa2_stuck_lock_sec:=8.0"

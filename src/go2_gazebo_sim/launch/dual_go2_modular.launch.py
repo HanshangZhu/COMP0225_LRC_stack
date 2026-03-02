@@ -456,6 +456,7 @@ def _build_dual_profile_actions(context):
     use_fast_lio = _as_bool(_get(context, "use_fast_lio"))
     enable_frontier_aux = _as_bool(_get(context, "enable_frontier_aux"))
     use_shared_map = _as_bool(_get(context, "use_shared_map"))
+    enable_internal_shared_map_fuser = _as_bool(_get(context, "enable_internal_shared_map_fuser"))
 
     enable_assets = _as_bool(_get(context, "enable_assets"))
     enable_perception = _as_bool(_get(context, "enable_perception"))
@@ -638,6 +639,25 @@ def _build_dual_profile_actions(context):
             output="screen",
         )
     )
+
+
+    if use_shared_map and enable_internal_shared_map_fuser:
+        actions.append(
+            Node(
+                package="go2_gazebo_sim",
+                executable="shared_map_fuser.py",
+                name="shared_map_fuser",
+                parameters=[
+                    {"use_sim_time": use_sim_time},
+                    {"map_a_topic": "/robot_a/map"},
+                    {"map_b_topic": "/robot_b/map"},
+                    {"output_topic": _get(context, "shared_map_topic")},
+                    {"frame_id": "world"},
+                    {"publish_rate": 2.0},
+                ],
+                output="screen",
+            )
+        )
 
     if profile == "autonomy":
         goal_topic = "/{ns}/way_point"
@@ -1224,6 +1244,7 @@ def generate_launch_description():
             DeclareLaunchArgument("use_shared_map", default_value="false"),
             DeclareLaunchArgument("shared_map_topic", default_value="/disco_slam/global_map"),
             DeclareLaunchArgument("shared_map_wait_sec", default_value="8.0"),
+            DeclareLaunchArgument("enable_internal_shared_map_fuser", default_value="true"),
             DeclareLaunchArgument("enable_assets", default_value="true"),
             DeclareLaunchArgument("enable_perception", default_value="true"),
             DeclareLaunchArgument("enable_slam", default_value="true"),
