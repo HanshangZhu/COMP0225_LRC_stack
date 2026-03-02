@@ -69,7 +69,6 @@ class SharedMapFuser(Node):
     def __init__(self) -> None:
         super().__init__("shared_map_fuser")
 
-        self.declare_parameter("use_sim_time", True)
         self.declare_parameter("map_a_topic", "/robot_a/map")
         self.declare_parameter("map_b_topic", "/robot_b/map")
         self.declare_parameter("output_topic", "/disco_slam/global_map")
@@ -92,16 +91,26 @@ class SharedMapFuser(Node):
         self._map_b: Optional[OccupancyGrid] = None
         self._published_once = False
 
-        latched_qos = QoSProfile(
+        # Upstream map publishers (simple_scan_mapper_cpp) use VOLATILE durability.
+        # Subscriptions must match that to receive data.
+        map_sub_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+
+        # Keep fused output latched so late-joining consumers can get latest map.
+        output_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
 
-        self.create_subscription(OccupancyGrid, self.map_a_topic, self._map_a_cb, latched_qos)
-        self.create_subscription(OccupancyGrid, self.map_b_topic, self._map_b_cb, latched_qos)
-        self.pub = self.create_publisher(OccupancyGrid, self.output_topic, latched_qos)
+        self.create_subscription(OccupancyGrid, self.map_a_topic, self._map_a_cb, map_sub_qos)
+        self.create_subscription(OccupancyGrid, self.map_b_topic, self._map_b_cb, map_sub_qos)
+        self.pub = self.create_publisher(OccupancyGrid, self.output_topic, output_qos)
 
         self.timer = self.create_timer(1.0 / self.publish_rate, self._tick)
         self.get_logger().info(
