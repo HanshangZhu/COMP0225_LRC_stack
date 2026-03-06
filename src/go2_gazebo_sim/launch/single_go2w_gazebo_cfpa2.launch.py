@@ -455,6 +455,23 @@ def _launch_setup(context):
                 ),
             ]
         )
+    # Exploration experiment logger — writes time-series CSV to /tmp
+    robot_actions.append(
+        Node(
+            package="go2w_observability",
+            executable="exploration_metrics_logger.py",
+            namespace=robot_ns,
+            name="exploration_metrics_logger",
+            parameters=[
+                {"use_sim_time": use_sim_time},
+                {"namespaces": [robot_ns]},
+                {"experiment_name": "single_go2w"},
+                {"log_rate": 1.0},
+                {"output_dir": "/tmp"},
+            ],
+            output="screen",
+        )
+    )
 
     if robot_actions:
         actions.append(TimerAction(period=16.0, actions=robot_actions))

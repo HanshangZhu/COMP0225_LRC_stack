@@ -12,6 +12,7 @@ install(PROGRAMS
   scripts/robot_status_monitor.py
   scripts/dual_map_coverage_visualizer.py
   scripts/odom_comparison.py
+  scripts/exploration_metrics_logger.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
