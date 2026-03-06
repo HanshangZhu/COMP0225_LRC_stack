@@ -41,7 +41,7 @@ def build_qos_bridge_node(ns: str | None, use_sim_time, extra_params=None, remap
         params.append(extra_params)
 
     kwargs = {
-        "package": "go2_gazebo_sim",
+        "package": "go2w_perception",
         "executable": "qos_bridge.py",
         "name": name,
         "parameters": params,

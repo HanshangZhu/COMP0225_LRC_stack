@@ -7,7 +7,7 @@ from launch_ros.actions import Node
 
 
 def nav_profile_path(filename: str) -> str:
-    return os.path.join(get_package_share_directory("go2_gazebo_sim"), "config", "nav", filename)
+    return os.path.join(get_package_share_directory("go2w_control"), "config", filename)
 
 
 def nav_algorithms_profile_path(filename: str) -> str:

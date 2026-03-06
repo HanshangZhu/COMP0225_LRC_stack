@@ -8,6 +8,7 @@ Profiles:
 """
 
 import os
+import shlex
 import sys
 
 import xacro
@@ -31,7 +32,7 @@ sys.path.append(os.path.dirname(__file__))
 sys.path.append(os.path.join(get_package_share_directory("go2_nav_algorithms"), "launch"))
 
 from modules.assets import build_dual_robot_stack, build_namespaced_robot_description
-from modules.control import build_autonomy_enabler_node, build_reactive_nav_node
+from modules.control import build_autonomy_enabler_node, build_reactive_nav_node, build_wall_checker_node
 from modules.navigation import build_geometric_frontier_node
 from modules.orchestration import build_rviz_node
 from modules.perception import build_qos_bridge_node
@@ -66,6 +67,108 @@ def _normalize_planner_backend(value: str) -> str:
             f"'{value}'. Use one of: {', '.join(sorted(supported))}."
         )
     return backend
+
+
+def _build_cleanup_stale_command() -> str:
+    patterns = [
+        "ros2 launch go2_gazebo_sim dual_go2_modular.launch.py",
+        "ros2 launch go2_gazebo_sim dual_go2w_modular.launch.py",
+        "[g]zserver",
+        "(^|/)gzclient( |$)",
+        "(^|/)gazebo( |$)",
+        "/go2_nav_algorithms/lib/go2_nav_algorithms/simple_scan_mapper_cpp",
+        "/go2_nav_algorithms/lib/go2_nav_algorithms/simple_frontier_explorer.py",
+        "/go2w_observability/lib/go2w_observability/dual_map_coverage_visualizer.py",
+        "/go2_gazebo_sim/lib/go2_gazebo_sim/shared_map_fuser.py",
+        "/go2w_control/lib/go2w_control/reactive_nav.py",
+        "/go2w_control/lib/go2w_control/autonomy_enabler.py",
+        "/go2w_perception/lib/go2w_perception/twist_bridge.py",
+        "/go2w_control/lib/go2w_control/go2w_hybrid_cmd_router.py",
+        "/go2w_perception/lib/go2w_perception/qos_bridge.py",
+        "/go2w_observability/lib/go2w_observability/robot_status_monitor.py",
+        "/go2w_spawn/lib/go2w_spawn/initial_pose_guard.py",
+        "/go2w_spawn/lib/go2w_spawn/spawn_entity_direct.py",
+        "/go2w_perception/lib/go2w_perception/pointcloud_adapter.py",
+        "/go2w_perception/lib/go2w_perception/slam_odom_relay.py",
+        "/cfpa2_collaborative_autonomy/lib/cfpa2_collaborative_autonomy/cfpa2_coordinator_node",
+        "/champ_base/lib/champ_base/quadruped_controller_node",
+        "/champ_base/lib/champ_base/state_estimation_node",
+        "/robot_localization/ekf_node",
+        "/robot_state_publisher",
+        "/champ_gazebo/lib/champ_gazebo/contact_sensor",
+        "/opt/ros/.*/lib/controller_manager/spawner",
+        "/fast_lio/lib/fast_lio/fastlio_mapping",
+        "/pointcloud_to_laserscan_node",
+    ]
+
+    command = [
+        "SELF=$$; PARENT=$PPID; ",
+        "kill_pattern(){ ",
+        "  PATTERN=\"$1\"; ",
+        "  SIGNAL=\"$2\"; ",
+        "  for PID in $(pgrep -f \"$PATTERN\" 2>/dev/null || true); do ",
+        "    [ \"$PID\" = \"$SELF\" ] && continue; ",
+        "    [ \"$PID\" = \"$PARENT\" ] && continue; ",
+        "    kill -\"$SIGNAL\" \"$PID\" 2>/dev/null || true; ",
+        "  done; ",
+        "}; ",
+    ]
+
+    for pattern in patterns:
+        command.append(f"kill_pattern {shlex.quote(pattern)} TERM; ")
+    command.append("sleep 1; ")
+    for pattern in patterns:
+        command.append(f"kill_pattern {shlex.quote(pattern)} KILL; ")
+    command.append("sleep 0.5")
+    return "".join(command)
+
+
+def _build_robot_variant_config(*, go2_gazebo_pkg: str, go2_config_pkg: str, robot_variant: str):
+    variant = robot_variant.strip().lower() or "go2"
+    if variant == "go2":
+        return {
+            "robot_variant": "go2",
+            "description_path": os.path.join(go2_gazebo_pkg, "urdf", "go2_description_3d_lidar.xacro"),
+            "ros_control_robot_a": os.path.join(
+                go2_gazebo_pkg, "config", "ros_control", "ros_control_robot_a.yaml"
+            ),
+            "ros_control_robot_b": os.path.join(
+                go2_gazebo_pkg, "config", "ros_control", "ros_control_robot_b.yaml"
+            ),
+            "joints_config": os.path.join(go2_config_pkg, "config", "joints", "joints.yaml"),
+            "links_config": os.path.join(go2_config_pkg, "config", "links", "links.yaml"),
+            "gait_config": os.path.join(go2_config_pkg, "config", "gait", "gait.yaml"),
+            "stand_up_joint_preset": "go2",
+        }
+
+    if variant == "go2w":
+        try:
+            get_package_share_directory("go2w_description")
+        except PackageNotFoundError as exc:
+            raise RuntimeError(
+                "robot_variant=go2w requires package 'go2w_description'. "
+                "Build the top-level workspace so src/unitree_go2w_ros2/src/go2w_description is installed."
+            ) from exc
+        return {
+            "robot_variant": "go2w",
+            "description_path": os.path.join(
+                go2_gazebo_pkg, "urdf", "go2w", "go2w_description_3d_lidar.xacro"
+            ),
+            "ros_control_robot_a": os.path.join(
+                go2_gazebo_pkg, "config", "ros_control", "ros_control_go2w_robot_a.yaml"
+            ),
+            "ros_control_robot_b": os.path.join(
+                go2_gazebo_pkg, "config", "ros_control", "ros_control_go2w_robot_b.yaml"
+            ),
+            "joints_config": os.path.join(go2_gazebo_pkg, "config", "champ", "go2w", "joints.yaml"),
+            "links_config": os.path.join(go2_gazebo_pkg, "config", "champ", "go2w", "links.yaml"),
+            "gait_config": os.path.join(go2_gazebo_pkg, "config", "champ", "go2w", "gait.yaml"),
+            "stand_up_joint_preset": "go2w",
+        }
+
+    raise RuntimeError(
+        f"Unsupported robot_variant '{robot_variant}'. Use robot_variant:=go2 or robot_variant:=go2w."
+    )
 
 
 def _wait_controllers_loaded(ns: str):
@@ -233,6 +336,10 @@ def _robot_autonomy_actions(
     enable_slam: bool,
     enable_control: bool,
     enable_navigation: bool,
+    reactive_nav_profile: str,
+    hybrid_motion_config: str | None = None,
+    wheel_controller_name: str | None = None,
+    hybrid_motion_extra_params: dict | None = None,
 ):
     tf_remaps = [("/tf", f"/{ns}/tf"), ("/tf_static", f"/{ns}/tf_static")]
     nav_odom_topic = f"/{ns}/odom/nav"
@@ -243,13 +350,48 @@ def _robot_autonomy_actions(
     if enable_control:
         actions.append(
             Node(
-                package="go2_gazebo_sim",
+                package="go2w_perception",
                 executable="twist_bridge.py",
                 namespace=ns,
                 remappings=[("/cmd_vel_stamped", f"/{ns}/cmd_vel_stamped"), ("/cmd_vel", f"/{ns}/cmd_vel")],
                 output="screen",
             )
         )
+        if hybrid_motion_config and wheel_controller_name:
+            hybrid_params = [
+                hybrid_motion_config,
+                {"wheel_command_topic": f"{wheel_controller_name}/commands"},
+            ]
+            if hybrid_motion_extra_params:
+                hybrid_params.append(hybrid_motion_extra_params)
+            actions.append(
+                Node(
+                    package="go2w_control",
+                    executable="go2w_hybrid_cmd_router.py",
+                    namespace=ns,
+                    name="go2w_hybrid_cmd_router",
+                    parameters=hybrid_params,
+                    output="screen",
+                )
+            )
+            if enable_navigation:
+                actions.append(
+                    build_wall_checker_node(
+                        ns=ns,
+                        use_sim_time=use_sim_time,
+                        extra_params={
+                            "scan_topic": planning_scan_topic,
+                            "stop_topic": f"/{ns}/stop",
+                            "mode_topic": "mobility_mode",
+                            "safety_dist": 0.28,
+                            "check_angle_deg": 30.0,
+                            "wheel_safety_dist": 0.50,
+                            "wheel_check_angle_deg": 70.0,
+                            "wheel_min_close_points": 4,
+                        },
+                        name="wheel_wall_collision_checker",
+                    )
+                )
 
     if enable_perception:
         actions.append(
@@ -266,7 +408,7 @@ def _robot_autonomy_actions(
     if enable_perception and enable_slam and use_fast_lio:
         actions.append(
             Node(
-                package="go2_gazebo_sim",
+                package="go2w_perception",
                 executable="pointcloud_adapter.py",
                 namespace=ns,
                 name="pointcloud_adapter",
@@ -398,7 +540,7 @@ def _robot_autonomy_actions(
             build_reactive_nav_node(
                 ns=ns,
                 use_sim_time=use_sim_time,
-                profile="reactive_nav_dual.yaml",
+                profile=reactive_nav_profile,
                 extra_params={
                     "frontier_replan_topic": f"/{ns}/frontier_replan",
                     "stop_topic": f"/{ns}/stop",
@@ -421,13 +563,13 @@ def _robot_autonomy_actions(
     return [TimerAction(period=startup_delay_sec, actions=actions)]
 
 
-def _build_dual_profile_actions(context):
+def _build_dual_profile_actions(context, *, launch_name: str, robot_config: dict[str, str], reactive_nav_profile: str):
     profile = _get(context, "profile").strip().lower()
 
     if profile == "pointlio_debug":
         go2_gazebo_pkg = get_package_share_directory("go2_gazebo_sim")
         return [
-            LogInfo(msg="[dual_go2_modular] profile=pointlio_debug -> delegating to pointlio_debug_core.launch.py"),
+            LogInfo(msg=f"[{launch_name}] profile=pointlio_debug -> delegating to pointlio_debug_core.launch.py"),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     os.path.join(go2_gazebo_pkg, "launch", "pointlio_debug_core.launch.py")
@@ -454,6 +596,9 @@ def _build_dual_profile_actions(context):
     rviz = _as_bool(_get(context, "rviz"))
     cleanup_stale = _as_bool(_get(context, "cleanup_stale"))
     use_fast_lio = _as_bool(_get(context, "use_fast_lio"))
+    pointcloud_noise_enabled = _as_bool(_get(context, "pointcloud_noise_enabled"))
+    pointcloud_noise_mean = _get(context, "pointcloud_noise_mean").strip() or "0.0"
+    pointcloud_noise_stddev = _get(context, "pointcloud_noise_stddev").strip() or "0.015"
     enable_frontier_aux = _as_bool(_get(context, "enable_frontier_aux"))
     use_shared_map = _as_bool(_get(context, "use_shared_map"))
     enable_internal_shared_map_fuser = _as_bool(_get(context, "enable_internal_shared_map_fuser"))
@@ -526,19 +671,42 @@ def _build_dual_profile_actions(context):
             )
     use_shared_graph_bus = use_tare_ros2_exact and not missing_shared_graph_packages
 
-    description_path = os.path.join(go2_gazebo_pkg, "urdf", "go2_description_3d_lidar.xacro")
-    doc = xacro.process_file(description_path)
+    robot_description_mappings = {}
+    if robot_config["robot_variant"] == "go2w":
+        robot_description_mappings = {
+            "pointcloud_noise_enabled": "true" if pointcloud_noise_enabled else "false",
+            "pointcloud_noise_mean": pointcloud_noise_mean,
+            "pointcloud_noise_stddev": pointcloud_noise_stddev,
+        }
+
+    doc = xacro.process_file(robot_config["description_path"], mappings=robot_description_mappings)
     base_robot_description = doc.documentElement.toxml()
 
-    ros_control_robot_a = os.path.join(go2_gazebo_pkg, "config", "ros_control", "ros_control_robot_a.yaml")
-    ros_control_robot_b = os.path.join(go2_gazebo_pkg, "config", "ros_control", "ros_control_robot_b.yaml")
+    robot_description_a = build_namespaced_robot_description(
+        base_robot_description, "robot_a", robot_config["ros_control_robot_a"]
+    )
+    robot_description_b = build_namespaced_robot_description(
+        base_robot_description, "robot_b", robot_config["ros_control_robot_b"]
+    )
 
-    robot_description_a = build_namespaced_robot_description(base_robot_description, "robot_a", ros_control_robot_a)
-    robot_description_b = build_namespaced_robot_description(base_robot_description, "robot_b", ros_control_robot_b)
-
-    joints_config = os.path.join(go2_config_pkg, "config", "joints", "joints.yaml")
-    links_config = os.path.join(go2_config_pkg, "config", "links", "links.yaml")
-    gait_config = os.path.join(go2_config_pkg, "config", "gait", "gait.yaml")
+    joints_config = robot_config["joints_config"]
+    links_config = robot_config["links_config"]
+    gait_config = robot_config["gait_config"]
+    stand_up_joint_preset = robot_config["stand_up_joint_preset"]
+    hybrid_motion_config = None
+    hybrid_motion_extra_params = None
+    cmd_vel_input_topic = "cmd_vel"
+    wheel_controller_names = {"robot_a": None, "robot_b": None}
+    rsp_publish_frequency = 200.0
+    if robot_config["robot_variant"] == "go2w":
+        hybrid_motion_config = os.path.join(go2_gazebo_pkg, "config", "control", "go2w_hybrid_motion.yaml")
+        hybrid_motion_extra_params = {"publish_rate": 15.0}
+        cmd_vel_input_topic = "cmd_vel_legged"
+        wheel_controller_names = {
+            "robot_a": "robot_a_wheel_velocity_controller",
+            "robot_b": "robot_b_wheel_velocity_controller",
+        }
+        rsp_publish_frequency = 100.0  # Go2W: lower TF rate to save CPU
     ekf_base_to_footprint = os.path.join(champ_base_pkg, "config", "ekf", "base_to_footprint.yaml")
     ekf_footprint_to_odom = os.path.join(champ_base_pkg, "config", "ekf", "footprint_to_odom.yaml")
     slam_config = os.path.join(go2_gazebo_pkg, "config", "slam", "pointlio_gazebo.yaml")
@@ -548,34 +716,7 @@ def _build_dual_profile_actions(context):
     if cleanup_stale:
         actions.append(
             ExecuteProcess(
-                cmd=[
-                    "bash",
-                    "-lc",
-                    "SELF=$$; PARENT=$PPID; "
-                    "kill_pattern(){ "
-                    "  PATTERN=\"$1\"; "
-                    "  for PID in $(pgrep -f \"$PATTERN\" 2>/dev/null || true); do "
-                    "    [ \"$PID\" = \"$SELF\" ] && continue; "
-                    "    [ \"$PID\" = \"$PARENT\" ] && continue; "
-                    "    kill \"$PID\" 2>/dev/null || true; "
-                    "  done; "
-                    "}; "
-                    "kill_pattern '[g]zserver'; "
-                    "kill_pattern '(^|/)gzclient( |$)'; "
-                    "kill_pattern '/go2_nav_algorithms/lib/go2_nav_algorithms/simple_scan_mapper_cpp'; "
-                    "kill_pattern '/go2_nav_algorithms/lib/go2_nav_algorithms/simple_frontier_explorer.py'; "
-                    "kill_pattern '/go2_gazebo_sim/lib/go2_gazebo_sim/reactive_nav.py'; "
-                    "kill_pattern '/go2_gazebo_sim/lib/go2_gazebo_sim/autonomy_enabler.py'; "
-                    "kill_pattern '/go2_gazebo_sim/lib/go2_gazebo_sim/twist_bridge.py'; "
-                    "kill_pattern '/go2_gazebo_sim/lib/go2_gazebo_sim/qos_bridge.py'; "
-                    "kill_pattern '/go2_gazebo_sim/lib/go2_gazebo_sim/robot_status_monitor.py'; "
-                    "kill_pattern '/go2_gazebo_sim/lib/go2_gazebo_sim/initial_pose_guard.py'; "
-                    "kill_pattern '/go2_gazebo_sim/lib/go2_gazebo_sim/pointcloud_adapter.py'; "
-                    "kill_pattern '/go2_gazebo_sim/lib/go2_gazebo_sim/slam_odom_relay.py'; "
-                    "kill_pattern '/fast_lio/lib/fast_lio/fastlio_mapping'; "
-                    "kill_pattern '/pointcloud_to_laserscan_node'; "
-                    "sleep 1",
-                ],
+                cmd=["bash", "-lc", _build_cleanup_stale_command()],
                 output="screen",
             )
         )
@@ -620,7 +761,7 @@ def _build_dual_profile_actions(context):
 
     actions.append(
         Node(
-            package="go2_gazebo_sim",
+            package="go2w_observability",
             executable="dual_map_coverage_visualizer.py",
             parameters=[
                 {"use_sim_time": use_sim_time},
@@ -698,6 +839,10 @@ def _build_dual_profile_actions(context):
             standup_delay_sec=4.0,
             pose_guard_hold_sec=12.0,
             activate_controllers_on_spawn=True,
+            stand_up_joint_preset=stand_up_joint_preset,
+            cmd_vel_input_topic=cmd_vel_input_topic,
+            wheel_controller_name=wheel_controller_names["robot_a"],
+            rsp_publish_frequency=rsp_publish_frequency,
             return_handles=True,
         )
         robot_b_stack_actions, robot_b_stack_handles = build_dual_robot_stack(
@@ -717,6 +862,10 @@ def _build_dual_profile_actions(context):
             standup_delay_sec=4.8,
             pose_guard_hold_sec=13.0,
             activate_controllers_on_spawn=True,
+            stand_up_joint_preset=stand_up_joint_preset,
+            cmd_vel_input_topic=cmd_vel_input_topic,
+            wheel_controller_name=wheel_controller_names["robot_b"],
+            rsp_publish_frequency=rsp_publish_frequency,
             return_handles=True,
         )
         robot_a_actions += robot_a_stack_actions
@@ -737,6 +886,10 @@ def _build_dual_profile_actions(context):
         enable_slam=enable_slam,
         enable_control=enable_control,
         enable_navigation=enable_navigation,
+        reactive_nav_profile=reactive_nav_profile,
+        hybrid_motion_config=hybrid_motion_config,
+        wheel_controller_name=wheel_controller_names["robot_a"],
+        hybrid_motion_extra_params=hybrid_motion_extra_params,
     )
     robot_b_actions += _robot_autonomy_actions(
         ns="robot_b",
@@ -751,6 +904,10 @@ def _build_dual_profile_actions(context):
         enable_slam=enable_slam,
         enable_control=enable_control,
         enable_navigation=enable_navigation,
+        reactive_nav_profile=reactive_nav_profile,
+        hybrid_motion_config=hybrid_motion_config,
+        wheel_controller_name=wheel_controller_names["robot_b"],
+        hybrid_motion_extra_params=hybrid_motion_extra_params,
     )
 
     exact_aux_actions = []
@@ -946,14 +1103,20 @@ def _build_dual_profile_actions(context):
             TimerAction(period=30.0, actions=[OpaqueFunction(function=_fallback_start_cb)]),
         ]
 
+    # Use deterministic staggered startup for the second robot.
+    # The previous OnProcessExit(wait_robot_a) handoff proved unreliable under GUI load:
+    # robot_a came up, wait_robot_a exited, but robot_b actions were never scheduled.
     if wait_robot_a is not None:
         actions.append(TimerAction(period=5.0, actions=robot_a_actions + [wait_robot_a]))
         actions.append(
-            RegisterEventHandler(
-                OnProcessExit(
-                    target_action=wait_robot_a,
-                    on_exit=robot_b_actions + ([wait_robot_b] if wait_robot_b is not None else []),
-                )
+            LogInfo(
+                msg=f"[{launch_name}] scheduling robot_b stack with fixed delayed startup at 14s."
+            )
+        )
+        actions.append(
+            TimerAction(
+                period=14.0,
+                actions=robot_b_actions + ([wait_robot_b] if wait_robot_b is not None else []),
             )
         )
     else:
@@ -1132,6 +1295,11 @@ def _build_dual_profile_actions(context):
                                     _get(context, "cfpa2_frontier_min_cluster_area_m2")
                                 )
                             },
+                            {
+                                "cfpa2_frontier_obstacle_clearance_m": float(
+                                    _get(context, "cfpa2_frontier_obstacle_clearance_m")
+                                )
+                            },
                             {"marker_frame_override": "world"},
                         ],
                         output="screen",
@@ -1142,7 +1310,7 @@ def _build_dual_profile_actions(context):
             actions.append(
                 LogInfo(
                     msg=(
-                        "[dual_go2_modular] planner_backend=tare_ros2_exact: "
+                        f"[{launch_name}] planner_backend=tare_ros2_exact: "
                         "launching exact split coordinator + BE + FAR planners."
                     )
                 )
@@ -1151,7 +1319,7 @@ def _build_dual_profile_actions(context):
             actions.append(
                 LogInfo(
                     msg=(
-                        f"[dual_go2_modular] planner_backend={planner_backend} is not native in Gazebo dual stack; "
+                        f"[{launch_name}] planner_backend={planner_backend} is not native in Gazebo dual stack; "
                         "running without global coordinator."
                     )
                 )
@@ -1175,7 +1343,7 @@ def _build_dual_profile_actions(context):
             period=18.0,
             actions=[
                 Node(
-                    package="go2_gazebo_sim",
+                    package="go2w_observability",
                     executable="robot_status_monitor.py",
                     name="robot_status_monitor",
                     parameters=[
@@ -1200,8 +1368,10 @@ def _build_dual_profile_actions(context):
         0,
         LogInfo(
             msg=(
-                "[dual_go2_modular] "
-                f"profile={profile} planner_backend={planner_backend} "
+                f"[{launch_name}] "
+                f"profile={profile} robot_variant={robot_config['robot_variant']} planner_backend={planner_backend} "
+                f"use_fast_lio={use_fast_lio} pointcloud_noise={pointcloud_noise_enabled} "
+                f"pointcloud_noise_stddev={pointcloud_noise_stddev} "
                 f"use_tare_ros2_exact={use_tare_ros2_exact} "
                 f"require_shared_graph={require_shared_graph} "
                 f"use_shared_graph_bus={use_shared_graph_bus} "
@@ -1215,7 +1385,7 @@ def _build_dual_profile_actions(context):
             1,
             LogInfo(
                 msg=(
-                    "[dual_go2_modular] tare_ros2_exact degraded mode: "
+                    f"[{launch_name}] tare_ros2_exact degraded mode: "
                     f"missing shared graph packages={missing_shared_graph_packages} "
                     "(require_shared_graph:=false)."
                 )
@@ -1225,8 +1395,14 @@ def _build_dual_profile_actions(context):
     return actions
 
 
-def generate_launch_description():
+def generate_fixed_variant_launch_description(*, launch_name: str, robot_variant: str, reactive_nav_profile: str):
     go2_gazebo_pkg = get_package_share_directory("go2_gazebo_sim")
+    go2_config_pkg = get_package_share_directory("go2_config")
+    robot_config = _build_robot_variant_config(
+        go2_gazebo_pkg=go2_gazebo_pkg,
+        go2_config_pkg=go2_config_pkg,
+        robot_variant=robot_variant,
+    )
 
     return LaunchDescription(
         [
@@ -1240,6 +1416,9 @@ def generate_launch_description():
             DeclareLaunchArgument("rviz", default_value="true"),
             DeclareLaunchArgument("cleanup_stale", default_value="true"),
             DeclareLaunchArgument("use_fast_lio", default_value="false"),
+            DeclareLaunchArgument("pointcloud_noise_enabled", default_value="false"),
+            DeclareLaunchArgument("pointcloud_noise_mean", default_value="0.0"),
+            DeclareLaunchArgument("pointcloud_noise_stddev", default_value="0.015"),
             DeclareLaunchArgument("enable_frontier_aux", default_value="false"),
             DeclareLaunchArgument("use_shared_map", default_value="false"),
             DeclareLaunchArgument("shared_map_topic", default_value="/disco_slam/global_map"),
@@ -1282,6 +1461,7 @@ def generate_launch_description():
             DeclareLaunchArgument("cfpa2_space_time_assumed_speed_mps", default_value="0.25"),
             DeclareLaunchArgument("cfpa2_space_time_max_speed_mps", default_value="0.60"),
             DeclareLaunchArgument("cfpa2_frontier_min_cluster_area_m2", default_value="0.20"),
+            DeclareLaunchArgument("cfpa2_frontier_obstacle_clearance_m", default_value="0.40"),
             DeclareLaunchArgument("robot_a_spawn_x", default_value="1.0"),
             DeclareLaunchArgument("robot_a_spawn_y", default_value="0.0"),
             DeclareLaunchArgument("robot_a_spawn_yaw", default_value="0.0"),
@@ -1294,6 +1474,21 @@ def generate_launch_description():
             DeclareLaunchArgument("pointlio_spawn_y", default_value="0.0"),
             DeclareLaunchArgument("pointlio_spawn_z", default_value="0.32"),
             DeclareLaunchArgument("pointlio_spawn_heading", default_value="0.0"),
-            OpaqueFunction(function=_build_dual_profile_actions),
+            OpaqueFunction(
+                function=lambda context, *_args, **_kwargs: _build_dual_profile_actions(
+                    context,
+                    launch_name=launch_name,
+                    robot_config=robot_config,
+                    reactive_nav_profile=reactive_nav_profile,
+                )
+            ),
         ]
+    )
+
+
+def generate_launch_description():
+    return generate_fixed_variant_launch_description(
+        launch_name="dual_go2_modular",
+        robot_variant="go2",
+        reactive_nav_profile="reactive_nav_dual.yaml",
     )

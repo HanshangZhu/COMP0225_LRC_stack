@@ -168,6 +168,11 @@ def build_dual_robot_stack(
     standup_delay_sec=9.0,
     pose_guard_hold_sec=8.5,
     activate_controllers_on_spawn=True,
+    stand_up_joint_preset="go2",
+    cmd_vel_input_topic="cmd_vel",
+    wheel_controller_name=None,
+    wheel_spawner_delay_sec=None,
+    rsp_publish_frequency=200.0,
     return_handles=False,
 ):
     tf_remaps = [("/tf", f"/{ns}/tf"), ("/tf_static", f"/{ns}/tf_static")]
@@ -189,7 +194,7 @@ def build_dual_robot_stack(
         parameters=[
             {"robot_description": ParameterValue(robot_description, value_type=str)},
             {"use_tf_static": False},
-            {"publish_frequency": 200.0},
+            {"publish_frequency": rsp_publish_frequency},
             {"ignore_timestamp": True},
             {"use_sim_time": use_sim_time},
         ],
@@ -200,6 +205,9 @@ def build_dual_robot_stack(
     joint_state_controller_name = f"{ns}_joint_states_controller"
     effort_controller_name = f"{ns}_joint_group_effort_controller"
     effort_topic = f"/{ns}/{effort_controller_name}/joint_trajectory"
+    wheel_controller_name = (wheel_controller_name or "").strip()
+    if wheel_spawner_delay_sec is None:
+        wheel_spawner_delay_sec = effort_spawner_delay_sec + 0.2
 
     quadruped_controller_node = Node(
         package="champ_base",
@@ -217,7 +225,13 @@ def build_dual_robot_stack(
             links_config,
             gait_config,
         ],
-        remappings=tf_remaps + [("cmd_vel/smooth", "cmd_vel"), ("/cmd_vel/smooth", "cmd_vel"), ("joy", "joy"), ("/joy", "joy")],
+        remappings=tf_remaps
+        + [
+            ("cmd_vel/smooth", cmd_vel_input_topic),
+            ("/cmd_vel/smooth", cmd_vel_input_topic),
+            ("joy", "joy"),
+            ("/joy", "joy"),
+        ],
         output="screen",
     )
 
@@ -266,7 +280,7 @@ def build_dual_robot_stack(
     )
 
     spawn_entity_node = Node(
-        package="go2_gazebo_sim",
+        package="go2w_spawn",
         executable="spawn_entity_direct.py",
         output="screen",
         arguments=[
@@ -290,7 +304,7 @@ def build_dual_robot_stack(
     )
 
     initial_pose_guard_node = Node(
-        package="go2_gazebo_sim",
+        package="go2w_spawn",
         executable="initial_pose_guard.py",
         name=f"{ns}_initial_pose_guard",
         parameters=[
@@ -344,6 +358,25 @@ def build_dual_robot_stack(
         output="screen",
     )
 
+    load_wheel_velocity_controller = None
+    if wheel_controller_name:
+        wheel_spawner_args = [
+            wheel_controller_name,
+            "--controller-manager",
+            f"/{ns}/controller_manager",
+            "--controller-manager-timeout",
+            "60",
+        ]
+        if not activate_controllers_on_spawn:
+            wheel_spawner_args.append("--inactive")
+        load_wheel_velocity_controller = Node(
+            package="controller_manager",
+            executable="spawner",
+            parameters=[{"use_sim_time": use_sim_time}],
+            arguments=wheel_spawner_args,
+            output="screen",
+        )
+
     contact_sensor = Node(
         package="champ_gazebo",
         executable="contact_sensor",
@@ -353,7 +386,7 @@ def build_dual_robot_stack(
     )
 
     stand_up_node = Node(
-        package="go2_gazebo_sim",
+        package="go2w_spawn",
         executable="stand_up_slowly.py",
         namespace=ns,
         parameters=[
@@ -364,6 +397,7 @@ def build_dual_robot_stack(
             {"phase3_sec": 18.0},
             {"knee_bend_ratio": 0.80},
             {"joint_controller_topic": effort_topic},
+            {"joint_name_preset": stand_up_joint_preset},
         ],
         output="screen",
     )
@@ -400,6 +434,11 @@ def build_dual_robot_stack(
             )
         ),
     ]
+    if load_wheel_velocity_controller is not None:
+        stack_actions.insert(
+            stack_actions.index(contact_sensor),
+            TimerAction(period=wheel_spawner_delay_sec, actions=[load_wheel_velocity_controller]),
+        )
     if return_handles:
         return (
             stack_actions,

@@ -14,7 +14,7 @@ def build_wall_checker_node(ns: str | None, use_sim_time, extra_params=None, rem
         params.append(extra_params)
 
     kwargs = {
-        "package": "go2_gazebo_sim",
+        "package": "go2w_control",
         "executable": "wall_collision_checker.py",
         "name": name,
         "parameters": params,
@@ -43,7 +43,7 @@ def build_reactive_nav_node(
         params.append(extra_params)
 
     kwargs = {
-        "package": "go2_gazebo_sim",
+        "package": "go2w_control",
         "executable": "reactive_nav.py",
         "name": name,
         "parameters": params,
@@ -58,7 +58,7 @@ def build_reactive_nav_node(
 
 def build_goalpoint_bridge_node(ns: str | None, use_sim_time, remappings=None, name: str = "goalpoint_to_waypoint"):
     kwargs = {
-        "package": "go2_gazebo_sim",
+        "package": "go2w_control",
         "executable": "goalpoint_to_waypoint.py",
         "name": name,
         "parameters": [{"use_sim_time": use_sim_time}],
@@ -77,7 +77,7 @@ def build_frontier_recovery_node(ns: str | None, use_sim_time, extra_params=None
         params.append(extra_params)
 
     kwargs = {
-        "package": "go2_gazebo_sim",
+        "package": "go2w_control",
         "executable": "frontier_recovery.py",
         "name": name,
         "parameters": params,
@@ -96,7 +96,7 @@ def build_motion_monitor_node(ns: str | None, use_sim_time, extra_params=None, r
         params.append(extra_params)
 
     kwargs = {
-        "package": "go2_gazebo_sim",
+        "package": "go2w_control",
         "executable": "motion_monitor.py",
         "name": name,
         "parameters": params,
@@ -115,7 +115,7 @@ def build_autonomy_enabler_node(ns: str | None, use_sim_time, extra_params=None,
         params.append(extra_params)
 
     kwargs = {
-        "package": "go2_gazebo_sim",
+        "package": "go2w_control",
         "executable": "autonomy_enabler.py",
         "name": name,
         "parameters": params,
@@ -134,7 +134,7 @@ def build_gazebo_frontier_visual_node(ns: str | None, use_sim_time, extra_params
         params.append(extra_params)
 
     kwargs = {
-        "package": "go2_gazebo_sim",
+        "package": "go2w_control",
         "executable": "gazebo_frontier_visual.py",
         "name": name,
         "parameters": params,

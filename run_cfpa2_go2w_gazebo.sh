@@ -70,6 +70,7 @@ if [[ "${CLEANUP_STALE_GAZEBO:-1}" == "1" ]]; then
     '/go2w_spawn/lib/go2w_spawn/spawn_entity_direct.py'
     '/go2w_perception/lib/go2w_perception/pointcloud_adapter.py'
     '/go2w_perception/lib/go2w_perception/slam_odom_relay.py'
+    '/fast_lio/lib/fast_lio/fastlio_mapping'
     '/cfpa2_collaborative_autonomy/lib/cfpa2_collaborative_autonomy/cfpa2_coordinator_node'
     '/champ_base/lib/champ_base/quadruped_controller_node'
     '/champ_base/lib/champ_base/state_estimation_node'
@@ -118,13 +119,27 @@ if [[ -n "${FASTRTPS_DEFAULT_PROFILES_FILE:-}" ]]; then
   echo "Using FASTRTPS_DEFAULT_PROFILES_FILE=${FASTRTPS_DEFAULT_PROFILES_FILE}"
 fi
 
+# --------------------------------------------------------------------------- #
+# CPU budget note (dual Go2W = ~50 processes):
+#   gzserver alone uses 1+ cores.  gzclient + rviz add 1-2 more.
+#   Two full CHAMP stacks (controller_manager @250Hz, RSP @200Hz,
+#   reactive_nav @20Hz, EKFs, lidar, mapper, frontier, hybrid router)
+#   easily saturate a 4-core machine.
+#
+#   Defaults below disable the GUI/RViz to keep headless runs stable.
+#   Override from the command line:  ./run_cfpa2_go2w_gazebo.sh gui:=true rviz:=true
+# --------------------------------------------------------------------------- #
+
 DEFAULT_LAUNCH_ARGS=(
   # Core sim runtime toggles.
   "use_sim_time:=true"
-  "gui:=true"
-  "rviz:=true"
+  "gui:=${GO2W_GUI:-true}"
+  "rviz:=${GO2W_RVIZ:-true}"
   "cleanup_stale:=false"
-  "use_fast_lio:=false"
+  "use_fast_lio:=${GO2W_USE_FAST_LIO:-false}"
+  "pointcloud_noise_enabled:=${GO2W_POINTCLOUD_NOISE:-false}"
+  "pointcloud_noise_mean:=${GO2W_POINTCLOUD_NOISE_MEAN:-0.0}"
+  "pointcloud_noise_stddev:=${GO2W_POINTCLOUD_NOISE_STDDEV:-0.015}"
   "enable_frontier_aux:=false"
 
   # Shared map ingestion for coordinator (optional global map topic).
@@ -147,9 +162,9 @@ DEFAULT_LAUNCH_ARGS=(
   "mtare_teammate_stale_ttl_sec:=120.0"
 
   # CFPA2 frontier utility weights.
-  "cfpa2_w_ig:=1.2" # information gain()
+  "cfpa2_w_ig:=1.2"
   "cfpa2_w_c:=0.6"
-  "cfpa2_w_sw:=0.2" 
+  "cfpa2_w_sw:=0.2"
   "cfpa2_lambda_overlap:=6.0"
   "cfpa2_sigma_overlap_m:=1.5"
 
@@ -174,13 +189,17 @@ DEFAULT_LAUNCH_ARGS=(
   # CFPA2 frontier cluster gate (connected frontier area in m^2).
   "cfpa2_frontier_min_cluster_area_m2:=0.1"
 
+  # Minimum clearance from occupied cells for a frontier cell to be a valid goal.
+  # Must be >= planner_inflation_radius to ensure goals are always reachable.
+  "cfpa2_frontier_obstacle_clearance_m:=0.40"
+
   # Spawn poses.
   "robot_a_spawn_x:=1.0"
   "robot_a_spawn_y:=0.0"
   "robot_a_spawn_yaw:=0"
-  "robot_b_spawn_x:=2.0" #18, alternatively
-  "robot_b_spawn_y:=0.0" #0
-  "robot_b_spawn_yaw:=3.14159" #3.14159
+  "robot_b_spawn_x:=2.0"
+  "robot_b_spawn_y:=0.0"
+  "robot_b_spawn_yaw:=3.14159"
 
   # Planner/backend selection.
   "planner_backend:=cfpa2"
@@ -202,7 +221,7 @@ DEFAULT_LAUNCH_ARGS=(
   "pointlio_spawn_heading:=0.0"
 )
 
-exec ros2 launch go2_gazebo_sim dual_go2_modular.launch.py \
+exec ros2 launch go2_gazebo_sim dual_go2w_modular.launch.py \
   "profile:=mtare_ros2" \
   "${DEFAULT_LAUNCH_ARGS[@]}" \
   "$@"

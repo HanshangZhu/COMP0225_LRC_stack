@@ -32,7 +32,7 @@ def build_slam_odom_relay_node(
         params[0]["gt_topic"] = gt_topic
 
     kwargs = {
-        "package": "go2_gazebo_sim",
+        "package": "go2w_perception",
         "executable": "slam_odom_relay.py",
         "name": name,
         "parameters": params,

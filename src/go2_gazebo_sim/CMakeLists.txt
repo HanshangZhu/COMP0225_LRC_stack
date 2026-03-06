@@ -25,27 +25,11 @@ install(DIRECTORY
   DESTINATION share/${PROJECT_NAME}
 )
 
-# Install Python scripts
+# Install remaining top-level scripts (non-wrapper implementations)
 install(PROGRAMS
-  scripts/qos_bridge.py
-  scripts/geometric_frontier.py
-  scripts/twist_bridge.py
-  scripts/wall_collision_checker.py
-  scripts/stand_up_slowly.py
-  scripts/autonomy_enabler.py
-  scripts/reactive_nav.py
-  scripts/dual_map_coverage_visualizer.py
-  scripts/robot_status_monitor.py
-  scripts/odom_comparison.py
-  scripts/slam_odom_relay.py
-  scripts/shared_map_fuser.py
-  scripts/pointcloud_adapter.py
-  scripts/initial_pose_guard.py
-  scripts/multi_robot_goal_assigner.py
   scripts/goal_assigner_passthrough.py
   scripts/waypoint_mux.py
-  scripts/spawn_drift_monitor.py
-  scripts/spawn_entity_direct.py
+  scripts/shared_map_fuser.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
