@@ -17,7 +17,7 @@ from _stack_components import build_dual_robot_stack, build_namespaced_robot_des
 
 def _drift_monitor_node(ns: str, use_sim_time, spawn_x, spawn_y, spawn_yaw, sample_rate, settle_sec, analysis_duration_sec):
     return Node(
-        package="go2_gazebo_sim",
+        package="go2w_spawn",
         executable="spawn_drift_monitor.py",
         name=f"{ns}_spawn_drift_monitor",
         parameters=[
@@ -119,9 +119,9 @@ def generate_launch_description():
             "-lc",
             "pkill -f '[g]zserver' || true; "
             "pkill -f '^gzclient$' || true; "
-            "pkill -f '/go2_gazebo_sim/lib/go2_gazebo_sim/[i]nitial_pose_guard.py' || true; "
-            "pkill -f '/go2_gazebo_sim/lib/go2_gazebo_sim/[s]tand_up_slowly.py' || true; "
-            "pkill -f '/go2_gazebo_sim/lib/go2_gazebo_sim/[s]pawn_drift_monitor.py' || true; "
+            "pkill -f '/go2w_spawn/lib/go2w_spawn/[i]nitial_pose_guard.py' || true; "
+            "pkill -f '/go2w_spawn/lib/go2w_spawn/[s]tand_up_slowly.py' || true; "
+            "pkill -f '/go2w_spawn/lib/go2w_spawn/[s]pawn_drift_monitor.py' || true; "
             "sleep 1",
         ],
         output="screen",

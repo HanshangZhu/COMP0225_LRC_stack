@@ -98,7 +98,7 @@ def generate_launch_description():
     # 2. Stand Up (8s delay for robot to spawn)
     # ================================================================
     stand_up_node = Node(
-        package="go2_gazebo_sim",
+        package="go2w_spawn",
         executable="stand_up_slowly.py",
         name="stand_up_slowly",
         output="screen",
@@ -109,7 +109,7 @@ def generate_launch_description():
     # 3. QoS Bridge — converts BestEffort → Reliable for /registered_scan
     # ================================================================
     qos_bridge_node = Node(
-        package="go2_gazebo_sim",
+        package="go2w_perception",
         executable="qos_bridge.py",
         name="qos_bridge",
         parameters=[{"use_sim_time": True}],
@@ -122,7 +122,7 @@ def generate_launch_description():
     #     needs ring (uint16) and time (float32) fields.
     # ================================================================
     pc_adapter_node = Node(
-        package="go2_gazebo_sim",
+        package="go2w_perception",
         executable="pointcloud_adapter.py",
         name="pointcloud_adapter",
         parameters=[
@@ -156,7 +156,7 @@ def generate_launch_description():
     # 5. Odom Comparison (SLAM vs Ground Truth → CSV)
     # ================================================================
     odom_comparison_node = Node(
-        package="go2_gazebo_sim",
+        package="go2w_observability",
         executable="odom_comparison.py",
         name="odom_comparison",
         parameters=[
@@ -175,7 +175,7 @@ def generate_launch_description():
     # 6a. SLAM odom relay: /Odometry → /slam/odom (with correct frames)
     # Target frame 'odom' because we link world->odom via static TF below
     slam_relay_node = Node(
-        package="go2_gazebo_sim",
+        package="go2w_perception",
         executable="slam_odom_relay.py",
         name="slam_odom_relay",
         parameters=[
@@ -219,7 +219,7 @@ def generate_launch_description():
 
     # 6c. Twist bridge (TwistStamped → Twist for Gazebo)
     twist_bridge_node = Node(
-        package="go2_gazebo_sim",
+        package="go2w_perception",
         executable="twist_bridge.py",
         name="twist_bridge",
         parameters=[{"use_sim_time": True}],
@@ -269,10 +269,10 @@ def generate_launch_description():
 
     # 6e. Reactive Nav controller — uses SLAM odom
     reactive_nav_config = os.path.join(
-        go2_gazebo_pkg, "config", "nav", "reactive_nav_single.yaml"
+        get_package_share_directory("go2w_control"), "config", "reactive_nav_single.yaml"
     )
     reactive_nav_node = Node(
-        package="go2_gazebo_sim",
+        package="go2w_control",
         executable="reactive_nav.py",
         name="reactive_nav",
         parameters=[
@@ -288,11 +288,11 @@ def generate_launch_description():
 
     # 6f. Wall collision checker
     wall_checker_node = Node(
-        package="go2_gazebo_sim",
+        package="go2w_control",
         executable="wall_collision_checker.py",
         name="wall_collision_checker",
         parameters=[
-            os.path.join(go2_gazebo_pkg, "config", "nav", "wall_checker.yaml"),
+            os.path.join(get_package_share_directory("go2w_control"), "config", "wall_checker.yaml"),
             {"use_sim_time": True},
         ],
         output="screen",
