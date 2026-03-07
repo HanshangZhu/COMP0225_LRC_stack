@@ -22,6 +22,7 @@
 - Local map output: `/<ns>/map` (published by `go2_nav_algorithms/simple_scan_mapper_cpp`).
 - Navigation odometry input: `/<ns>/odom/nav` (published by `go2_gazebo_sim/scripts/slam/slam_odom_relay.py`).
 - Velocity source of truth: `/<ns>/cmd_vel_stamped` from `go2_gazebo_sim/scripts/control/reactive_nav.py`.
+- Real-robot velocity arbitration output: root `/cmd_vel` (published by `go2_gazebo_sim/scripts/control/cmd_vel_activity_mux.py`).
 - M-TARE marker source: `/<ns>/mtare_goal_marker` from `mtare_ros2/mtare_coordinator.py`.
 
 ## `tare_ros2_exact` Backend Notes
@@ -41,7 +42,10 @@
 
 - Legacy top-level script paths in `go2_gazebo_sim/scripts/*.py` are wrappers for one release cycle.
 - Planned removal target: next minor release after this refactor cut.
-- Canonical launch is `go2_gazebo_sim/launch/dual_go2_modular.launch.py`.
+- Canonical Go2 launch is `go2_gazebo_sim/launch/dual_go2_modular.launch.py`.
+- Canonical Go2W launch is `go2_gazebo_sim/launch/dual_go2w_modular.launch.py`.
+- Canonical single-Go2W Gazebo launch is `go2_gazebo_sim/launch/single_go2w_gazebo_cfpa2.launch.py`.
+- Canonical single-Go2W real-robot launch is `go2_gazebo_sim/launch/single_go2w_real_cfpa2.launch.py`.
 - Legacy launch names remain as wrappers:
   - `two_go2_t_world_autonomy.launch.py`
   - `two_go2_t_world_coordinated_autonomy.launch.py`

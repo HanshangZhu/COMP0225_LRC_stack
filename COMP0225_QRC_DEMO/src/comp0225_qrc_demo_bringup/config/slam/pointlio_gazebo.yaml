@@ -1,0 +1,55 @@
+# FAST-LIO2 configuration for Gazebo simulation (Go2 with 3D LiDAR)
+# Sensor: go2_description_3d_lidar.xacro gpu_ray (Velodyne-style, 1024x16, 10Hz)
+# IMU:    gazebo.xacro imu_sensor (100Hz, on imu_link = trunk)
+#
+# NOTE: Must use the /**:/ros__parameters: wrapper for ROS 2 param loading.
+
+/**:
+    ros__parameters:
+        feature_extract_enable: false
+        point_filter_num: 4
+        max_iteration: 3
+        filter_size_surf: 0.5
+        filter_size_map: 0.5
+        cube_side_length: 1000.0
+        runtime_pos_log_enable: false
+        map_file_path: ""
+
+        common:
+            lid_topic: "/velodyne_points"
+            imu_topic: "/imu/data"
+            time_sync_en: false
+            time_offset_lidar_to_imu: 0.0
+
+        preprocess:
+            lidar_type: 2                     # 2 = Velodyne-style (unorganised PointCloud2)
+            scan_line: 16                     # URDF: 16 vertical samples
+            scan_rate: 10                     # URDF: update_rate 10 Hz
+            timestamp_unit: 2                 # 0=sec 1=ms 2=us 3=ns.  Gazebo uses microseconds.
+            blind: 0.3                        # ignore points closer than 0.3m (self-collision filter)
+
+        mapping:
+            acc_cov: 0.1
+            gyr_cov: 0.1
+            b_acc_cov: 0.0001
+            b_gyr_cov: 0.0001
+            fov_degree: 360.0                 # full 360 horizontal scan
+            det_range: 20.0                   # match URDF max range
+            extrinsic_est_en: false           # fixed extrinsics (known from URDF)
+            # Extrinsic: lidar_3d_link relative to imu_link
+            # From URDF: lidar_3d_joint origin xyz="0.20 0.0 0.25" rpy="0 0 0"
+            # imu_link is co-located with trunk (imu_joint origin 0 0 0)
+            extrinsic_T: [0.20, 0.0, 0.25]
+            extrinsic_R: [1.0, 0.0, 0.0,
+                          0.0, 1.0, 0.0,
+                          0.0, 0.0, 1.0]
+
+        publish:
+            path_en: true
+            scan_publish_en: true
+            dense_publish_en: true
+            scan_bodyframe_pub_en: false
+
+        pcd_save:
+            pcd_save_en: false
+            interval: -1

@@ -354,9 +354,8 @@ def _launch_setup(context):
                 extra_params={
                     "target_frame": "base_link",
                     # LiDAR is at ~0.12m above base_link with 13° pitch.
-                    # Walls at ground level appear at z≈-0.10 to 0.0 in base_link frame.
-                    # Previous min_height=0.12 was ABOVE the LiDAR itself — walls were invisible!
-                    "min_height": -0.15,
+                    # 0.05 filters out ground reflections and robot leg hits.
+                    "min_height": 0.05,
                     "max_height": 0.60,
                     "range_min": 0.10,
                     "range_max": 8.0,
@@ -369,6 +368,7 @@ def _launch_setup(context):
                 ],
             )
         )
+
 
     if enable_navigation:
         robot_actions.extend(
@@ -393,6 +393,9 @@ def _launch_setup(context):
                             "map_topic": f"/{robot_ns}/map",
                             "map_frame": "world",
                             "startup_delay": 0.0,
+                            # TF-based scan projection — interpolates odom at
+                            # exact scan timestamps via tf2_ros::Buffer.
+                            "scan_frame": "base_link",
                         },
                     ],
                     remappings=[("/tf", f"/{robot_ns}/tf"), ("/tf_static", f"/{robot_ns}/tf_static")],
@@ -450,6 +453,7 @@ def _launch_setup(context):
                         ("/nav_status", f"/{robot_ns}/nav_status"),
                         ("/planned_path", f"/{robot_ns}/planned_path"),
                         ("/final_goal_marker", f"/{robot_ns}/final_goal_marker"),
+                        ("/robot_pose_marker", f"/{robot_ns}/robot_pose_marker"),
                     ],
                     output="screen",
                 ),

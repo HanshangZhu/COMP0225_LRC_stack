@@ -1,0 +1,1 @@
+ament_index_python;launch;launch_ros;rclpy;sensor_msgs;geometry_msgs;nav_msgs;std_msgs;visualization_msgs;tf2_ros;xacro;robot_state_publisher;robot_localization;gazebo_ros2_control;rviz2;joy;champ_base;champ_gazebo;go2_nav_algorithms;pointcloud_to_laserscan;fast_lio;local_planner;terrain_analysis;terrain_analysis_ext;point_lio_unilidar;transform_sensors;far_planner;graph_decoder

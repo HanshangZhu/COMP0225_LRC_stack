@@ -10,6 +10,7 @@ setup(
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
         ("share/" + package_name, ["package.xml"]),
         ("share/" + package_name + "/config", ["config/cfpa2_coordinator.yaml"]),
+        ("share/" + package_name + "/config", ["config/cfpa2_single_robot.yaml"]),
     ],
     install_requires=["setuptools"],
     zip_safe=True,
@@ -23,6 +24,10 @@ setup(
             (
                 "cfpa2_coordinator_node = "
                 "cfpa2_collaborative_autonomy.cfpa2_coordinator_node:main"
+            ),
+            (
+                "cfpa2_single_robot_node = "
+                "cfpa2_collaborative_autonomy.cfpa2_single_robot_node:main"
             ),
         ],
     },

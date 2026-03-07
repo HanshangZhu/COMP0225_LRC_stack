@@ -27,3 +27,5 @@
 # Local ROS1 workspace build artifacts
 /src/mtare_ros1_ws/build/
 /src/mtare_ros1_ws/devel/
+
+/src/further_idea.md

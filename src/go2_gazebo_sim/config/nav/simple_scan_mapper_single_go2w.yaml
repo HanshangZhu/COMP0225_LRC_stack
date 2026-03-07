@@ -1,0 +1,15 @@
+/**:
+  ros__parameters:
+    # Occupancy grid tuned for single-paint-per-scan (each scan is applied
+    # exactly once).  Walls require 3 hits to appear (filters transient noise
+    # and grazing-angle edge returns), but persist well once confirmed.
+    max_range: 8.0
+    max_clear_distance: 8.0
+    update_rate: 2.0
+    max_scan_odom_dt: 0.10
+    hit_increment: 5
+    miss_decrement: 2
+    occupied_score_threshold: 12
+    free_score_threshold: -2
+    score_min: -12
+    score_max: 20

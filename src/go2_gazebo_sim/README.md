@@ -1,8 +1,9 @@
 # go2_gazebo_sim Runbook
 
-This package now uses a canonical modular launch:
+This package now uses canonical modular launches:
 
 - `go2_gazebo_sim/launch/dual_go2_modular.launch.py`
+- `go2_gazebo_sim/launch/dual_go2w_modular.launch.py`
 
 Legacy launch files are still available as wrappers for compatibility.
 
@@ -17,7 +18,19 @@ source install/setup.bash
 
 ## 2. Canonical run commands
 
-Autonomy profile:
+Go2 shell entrypoint:
+
+```bash
+./run_cfpa2_gazebo.sh
+```
+
+Go2W shell entrypoint:
+
+```bash
+./run_cfpa2_go2w_gazebo.sh
+```
+
+Go2 autonomy profile:
 
 ```bash
 ros2 launch go2_gazebo_sim dual_go2_modular.launch.py \
@@ -25,7 +38,7 @@ ros2 launch go2_gazebo_sim dual_go2_modular.launch.py \
   planner_backend:=none
 ```
 
-Coordinated profile (shared assigner):
+Go2 coordinated profile (shared assigner):
 
 ```bash
 ros2 launch go2_gazebo_sim dual_go2_modular.launch.py \
@@ -33,7 +46,7 @@ ros2 launch go2_gazebo_sim dual_go2_modular.launch.py \
   planner_backend:=coordinated
 ```
 
-M-TARE ROS2 profile:
+Go2 M-TARE ROS2 profile:
 
 ```bash
 ros2 launch go2_gazebo_sim dual_go2_modular.launch.py \
@@ -48,12 +61,45 @@ M-TARE shared RViz now visualizes:
 - per-robot goals: `/robot_a/mtare_goal_marker`, `/robot_b/mtare_goal_marker`
 - per-robot planned paths: `/robot_a/planned_path`, `/robot_b/planned_path`
 
-PointLIO debug profile:
+Go2 PointLIO debug profile:
 
 ```bash
 ros2 launch go2_gazebo_sim dual_go2_modular.launch.py \
   profile:=pointlio_debug \
   pointlio_autonomous:=true
+```
+
+Single-robot CMU-style stack (SLAM + frontier + local planner + sport API publisher):
+
+```bash
+ros2 launch go2_gazebo_sim go2_l_corridor_cmu_frontier_local.launch.py
+```
+
+Single-Go2W real-robot CFPA2 stack (CMU SLAM backend + single-robot CFPA2 + reactive_nav + joystick fallback):
+
+```bash
+ros2 launch go2_gazebo_sim single_go2w_real_cfpa2.launch.py
+```
+
+Single-Go2W Gazebo CFPA2 stack (single robot, Go2W assets, simulated odom + point cloud):
+
+```bash
+ros2 launch go2_gazebo_sim single_go2w_gazebo_cfpa2.launch.py
+```
+
+Shell entrypoint for the same stack:
+
+```bash
+./src/autonomy_stack_go2/system_real_robot_go2w_cfpa2.sh
+```
+
+Go2W M-TARE ROS2 profile:
+
+```bash
+ros2 launch go2_gazebo_sim dual_go2w_modular.launch.py \
+  profile:=mtare_ros2 \
+  planner_backend:=mtare_ros2 \
+  enable_frontier_aux:=false
 ```
 
 ## 3. Most useful arguments to change
@@ -129,6 +175,7 @@ ros2 launch go2_gazebo_sim test_pointlio.launch.py
 
 ```bash
 ros2 launch go2_gazebo_sim dual_go2_modular.launch.py --show-args
+ros2 launch go2_gazebo_sim dual_go2w_modular.launch.py --show-args
 ```
 
 ## 6. Troubleshooting
@@ -138,3 +185,4 @@ If launch fails with Python module errors in ROS nodes (for example `numpy` or `
 Typical startup confirmation line:
 
 - `[dual_go2_modular] profile=<...> planner_backend=<...> assets=<...> perception=<...> slam=<...> control=<...> navigation=<...>`
+- `[dual_go2w_modular] profile=<...> planner_backend=<...> assets=<...> perception=<...> slam=<...> control=<...> navigation=<...>`

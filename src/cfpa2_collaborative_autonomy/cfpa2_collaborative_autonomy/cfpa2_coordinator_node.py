@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import heapq
+import json
 import math
 import sys
 import time
@@ -19,6 +20,7 @@ from mtare_ros2.msg import GridWorldStatus
 from nav_msgs.msg import OccupancyGrid, Odometry
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
+from std_msgs.msg import String
 from visualization_msgs.msg import Marker, MarkerArray
 
 
@@ -75,10 +77,22 @@ def select_first_route_goals(
 
 
 class CFPA2Coordinator(Node):
-    def __init__(self) -> None:
-        super().__init__("cfpa2_coordinator")
+    def __init__(
+        self,
+        *,
+        node_name: str = "cfpa2_coordinator",
+        default_namespaces: Optional[list[str]] = None,
+        startup_label: str = "cfpa2_coordinator",
+        planner_desc: str = "Coordinator",
+    ) -> None:
+        super().__init__(node_name)
 
-        self.declare_parameter("namespaces", ["robot_a", "robot_b"])
+        if default_namespaces is None:
+            default_namespaces = ["robot_a", "robot_b"]
+        self._startup_label = startup_label
+        self._planner_desc = planner_desc
+
+        self.declare_parameter("namespaces", default_namespaces)
         self.declare_parameter("publish_rate", 1.0)
         self.declare_parameter("beta", 0.18)
         self.declare_parameter("sensor_range", 3.5)
@@ -89,6 +103,7 @@ class CFPA2Coordinator(Node):
         self.declare_parameter("tare_goal_topic_suffix", "/way_point_tare")
         self.declare_parameter("relocation_goal_topic_suffix", "/goal_point")
         self.declare_parameter("grid_world_status_topic_suffix", "/grid_world_status")
+        self.declare_parameter("nav_status_topic_suffix", "/nav_status")
         self.declare_parameter("use_shared_map", False)
         self.declare_parameter("shared_map_topic", "/disco_slam/global_map")
         self.declare_parameter("shared_map_wait_sec", 8.0)
@@ -120,6 +135,8 @@ class CFPA2Coordinator(Node):
         self.declare_parameter("cfpa2_stuck_lock_sec", 45.0)
         self.declare_parameter("cfpa2_stuck_min_motion_m", 0.20)
         self.declare_parameter("cfpa2_stuck_blacklist_sec", 60.0)
+        self.declare_parameter("local_nav_status_stale_sec", 3.0)
+        self.declare_parameter("local_nav_stall_blacklist_sec", 45.0)
         self.declare_parameter("cfpa2_close_stop_radius_m", 0.35)
         self.declare_parameter("cfpa2_close_stop_speed_epsilon", 0.02)
         self.declare_parameter("cfpa2_space_time_enabled", True)
@@ -132,6 +149,7 @@ class CFPA2Coordinator(Node):
         self.declare_parameter("cfpa2_space_time_assumed_speed_mps", 0.25)
         self.declare_parameter("cfpa2_space_time_max_speed_mps", 0.60)
         self.declare_parameter("cfpa2_frontier_min_cluster_area_m2", 0.20)
+        self.declare_parameter("cfpa2_frontier_obstacle_clearance_m", 0.40)
         self.declare_parameter("communication_timeout_sec", 6.0)
         self.declare_parameter("prediction_horizon_sec", 4.0)
         self.declare_parameter("pursuit_weight", 2.0)
@@ -155,6 +173,13 @@ class CFPA2Coordinator(Node):
         self.declare_parameter("perf_min_samples", 20)
         self.declare_parameter("perf_tick_warn_p95_ms", 150.0)
         self.declare_parameter("perf_cpu_warn_pct", 15.0)
+        self.declare_parameter("adaptive_load_shedding_enabled", False)
+        self.declare_parameter("adaptive_budget_utilization", 0.85)
+        self.declare_parameter("adaptive_restore_utilization", 0.55)
+        self.declare_parameter("adaptive_max_frontier_stride", 8)
+        self.declare_parameter("adaptive_min_max_targets", 120)
+        self.declare_parameter("adaptive_min_exploration_gain_radius_cells", 2)
+        self.declare_parameter("adaptive_max_skip_ticks", 2)
         self.declare_parameter("debug_no_goal_logging", True)
         self.declare_parameter("debug_no_goal_log_interval_sec", 2.0)
 
@@ -176,6 +201,7 @@ class CFPA2Coordinator(Node):
         self.grid_world_status_topic_suffix = str(
             self.get_parameter("grid_world_status_topic_suffix").value
         )
+        self.nav_status_topic_suffix = str(self.get_parameter("nav_status_topic_suffix").value)
         self.use_shared_map = bool(self.get_parameter("use_shared_map").value)
         self.shared_map_topic = str(self.get_parameter("shared_map_topic").value)
         self.shared_map_wait_sec = max(0.0, float(self.get_parameter("shared_map_wait_sec").value))
@@ -227,6 +253,12 @@ class CFPA2Coordinator(Node):
         self.cfpa2_stuck_blacklist_sec = max(
             0.0, float(self.get_parameter("cfpa2_stuck_blacklist_sec").value)
         )
+        self.local_nav_status_stale_sec = max(
+            0.0, float(self.get_parameter("local_nav_status_stale_sec").value)
+        )
+        self.local_nav_stall_blacklist_sec = max(
+            0.0, float(self.get_parameter("local_nav_stall_blacklist_sec").value)
+        )
         self.cfpa2_close_stop_radius_m = max(
             0.0, float(self.get_parameter("cfpa2_close_stop_radius_m").value)
         )
@@ -262,6 +294,9 @@ class CFPA2Coordinator(Node):
         self.cfpa2_frontier_min_cluster_area_m2 = max(
             0.0, float(self.get_parameter("cfpa2_frontier_min_cluster_area_m2").value)
         )
+        self.cfpa2_frontier_obstacle_clearance_m = max(
+            0.0, float(self.get_parameter("cfpa2_frontier_obstacle_clearance_m").value)
+        )
         self.communication_timeout_sec = max(0.0, float(self.get_parameter("communication_timeout_sec").value))
         self.prediction_horizon_sec = max(0.0, float(self.get_parameter("prediction_horizon_sec").value))
         self.pursuit_weight = max(0.0, float(self.get_parameter("pursuit_weight").value))
@@ -293,6 +328,33 @@ class CFPA2Coordinator(Node):
         self.perf_min_samples = max(5, int(self.get_parameter("perf_min_samples").value))
         self.perf_tick_warn_p95_ms = max(0.0, float(self.get_parameter("perf_tick_warn_p95_ms").value))
         self.perf_cpu_warn_pct = max(0.0, float(self.get_parameter("perf_cpu_warn_pct").value))
+        self.adaptive_load_shedding_enabled = bool(
+            self.get_parameter("adaptive_load_shedding_enabled").value
+        )
+        self.adaptive_budget_utilization = min(
+            1.5,
+            max(0.2, float(self.get_parameter("adaptive_budget_utilization").value)),
+        )
+        self.adaptive_restore_utilization = min(
+            self.adaptive_budget_utilization,
+            max(0.1, float(self.get_parameter("adaptive_restore_utilization").value)),
+        )
+        self.adaptive_max_frontier_stride = max(
+            self.frontier_stride,
+            int(self.get_parameter("adaptive_max_frontier_stride").value),
+        )
+        self.adaptive_min_max_targets = min(
+            self.max_targets,
+            max(50, int(self.get_parameter("adaptive_min_max_targets").value)),
+        )
+        self.adaptive_min_exploration_gain_radius_cells = min(
+            self.exploration_gain_radius_cells,
+            max(1, int(self.get_parameter("adaptive_min_exploration_gain_radius_cells").value)),
+        )
+        self.adaptive_max_skip_ticks = max(
+            0,
+            int(self.get_parameter("adaptive_max_skip_ticks").value),
+        )
         self.debug_no_goal_logging = bool(self.get_parameter("debug_no_goal_logging").value)
         self.debug_no_goal_log_interval_sec = max(
             0.2, float(self.get_parameter("debug_no_goal_log_interval_sec").value)
@@ -303,6 +365,8 @@ class CFPA2Coordinator(Node):
         self.odoms: dict[str, Odometry] = {}
         self.grid_world_status: dict[str, GridWorldStatus] = {}
         self.grid_world_status_rx_time_ns: dict[str, int] = {}
+        self.nav_status: dict[str, dict[str, Any]] = {}
+        self.nav_status_rx_time_ns: dict[str, int] = {}
         self.last_goal: dict[str, tuple[float, float]] = {}
         self.last_goal_set_time_ns: dict[str, int] = {}
         self.goal_progress_samples: dict[str, deque[tuple[int, float]]] = {
@@ -328,6 +392,9 @@ class CFPA2Coordinator(Node):
             ns: None for ns in self.namespaces
         }
         self.cfpa2_last_stuck_event_ns: dict[str, int] = {ns: 0 for ns in self.namespaces}
+        self.local_nav_last_stall_event_count: dict[str, int] = {
+            ns: 0 for ns in self.namespaces
+        }
 
         self._warned_missing_shared_map = False
         self._shared_map_fallback_active = False
@@ -343,6 +410,11 @@ class CFPA2Coordinator(Node):
         self._last_perf_summary_ns = 0
         self._perf_last_cpu_process_sec = time.process_time()
         self._perf_last_cpu_wall_ns = time.perf_counter_ns()
+        self._adaptive_frontier_stride = self.frontier_stride
+        self._adaptive_max_targets = self.max_targets
+        self._adaptive_exploration_gain_radius_cells = self.exploration_gain_radius_cells
+        self._adaptive_skip_ticks = 0
+        self._adaptive_tick_skip_counter = 0
         self._mui_last_solve_ns = 0
         self._mui_last_cell_keys: set[tuple[int, int, int]] = set()
         self._mui_routes: dict[str, list[int]] = {ns: [] for ns in self.namespaces}
@@ -373,6 +445,12 @@ class CFPA2Coordinator(Node):
                 lambda m, n=ns: self._grid_world_status_cb(m, n),
                 10,
             )
+            self.create_subscription(
+                String,
+                f"/{ns}{self.nav_status_topic_suffix}",
+                lambda m, n=ns: self._nav_status_cb(m, n),
+                10,
+            )
             self.goal_pubs[ns] = self.create_publisher(PointStamped, f"/{ns}{self.goal_topic_suffix}", 10)
             self.tare_goal_pubs[ns] = self.create_publisher(PointStamped, f"/{ns}{self.tare_goal_topic_suffix}", 10)
             self.relocation_goal_pubs[ns] = self.create_publisher(
@@ -383,9 +461,9 @@ class CFPA2Coordinator(Node):
             self.create_subscription(OccupancyGrid, self.shared_map_topic, self._shared_map_cb, 1)
 
         self.timer = self.create_timer(1.0 / self.publish_rate, self._tick)
-        self.get_logger().info("[planner_startup] cfpa2_coordinator initialized.")
+        self.get_logger().info(f"[planner_startup] {self._startup_label} initialized.")
         self.get_logger().info(
-            f"Coordinator started for {self.namespaces} | mode={self.algorithm_mode} "
+            f"{self._planner_desc} started for {self.namespaces} | mode={self.algorithm_mode} "
             f"beta={self.beta:.2f}, sensor_range={self.sensor_range:.2f}, "
             f"goal_lock_sec={self.goal_lock_sec:.1f}, progress_window_sec={self.progress_window_sec:.1f}, "
             f"progress_min_delta_m={self.progress_min_delta_m:.2f}, "
@@ -403,6 +481,8 @@ class CFPA2Coordinator(Node):
             f"cfpa2_stuck_lock_sec={self.cfpa2_stuck_lock_sec:.1f}, "
             f"cfpa2_stuck_min_motion_m={self.cfpa2_stuck_min_motion_m:.2f}, "
             f"cfpa2_stuck_blacklist_sec={self.cfpa2_stuck_blacklist_sec:.1f}, "
+            f"local_nav_status_stale_sec={self.local_nav_status_stale_sec:.1f}, "
+            f"local_nav_stall_blacklist_sec={self.local_nav_stall_blacklist_sec:.1f}, "
             f"cfpa2_close_stop_radius_m={self.cfpa2_close_stop_radius_m:.2f}, "
             f"cfpa2_space_time_enabled={self.cfpa2_space_time_enabled} "
             f"cfpa2_space_time_horizon_sec={self.cfpa2_space_time_horizon_sec:.1f} "
@@ -435,7 +515,8 @@ class CFPA2Coordinator(Node):
             f"shared_map_local_patch_radius_m={self.shared_map_local_patch_radius_m:.2f} "
             f"perf_enable={self.perf_enable} "
             f"perf_tick_warn_p95_ms={self.perf_tick_warn_p95_ms:.1f} "
-            f"perf_cpu_warn_pct={self.perf_cpu_warn_pct:.1f}"
+            f"perf_cpu_warn_pct={self.perf_cpu_warn_pct:.1f} "
+            f"adaptive_load_shedding_enabled={self.adaptive_load_shedding_enabled}"
         )
 
     def _map_cb(self, msg: OccupancyGrid, ns: str) -> None:
@@ -453,6 +534,16 @@ class CFPA2Coordinator(Node):
     def _grid_world_status_cb(self, msg: GridWorldStatus, ns: str) -> None:
         self.grid_world_status[ns] = msg
         self.grid_world_status_rx_time_ns[ns] = self.get_clock().now().nanoseconds
+
+    def _nav_status_cb(self, msg: String, ns: str) -> None:
+        try:
+            payload = json.loads(msg.data)
+        except json.JSONDecodeError:
+            return
+        if not isinstance(payload, dict):
+            return
+        self.nav_status[ns] = payload
+        self.nav_status_rx_time_ns[ns] = self.get_clock().now().nanoseconds
 
     def _shared_map_cb(self, msg: OccupancyGrid) -> None:
         self.shared_map = msg
@@ -486,6 +577,27 @@ class CFPA2Coordinator(Node):
     def _is_unknown(self, data: list[int], idx: int) -> bool:
         return data[idx] == self.unknown_value
 
+    def _has_frontier_obstacle_clearance(
+        self, data: list[int], gx: int, gy: int, w: int, h: int, radius_cells: int
+    ) -> bool:
+        """Return True iff a circle of radius_cells around (gx,gy) contains no occupied cell."""
+        if radius_cells <= 0:
+            return True
+        r2 = radius_cells * radius_cells
+        for dy in range(-radius_cells, radius_cells + 1):
+            ny = gy + dy
+            if ny < 0 or ny >= h:
+                return False
+            for dx in range(-radius_cells, radius_cells + 1):
+                if dx * dx + dy * dy > r2:
+                    continue
+                nx = gx + dx
+                if nx < 0 or nx >= w:
+                    return False
+                if data[self._grid_index(nx, ny, w)] >= self.occ_thresh:
+                    return False
+        return True
+
     def _build_fallback_map(self) -> Optional[OccupancyGrid]:
         return build_fallback_map(
             namespaces=self.namespaces,
@@ -513,8 +625,9 @@ class CFPA2Coordinator(Node):
         data = msg.data
         res = max(1e-6, float(msg.info.resolution))
         out: list[tuple[float, float]] = []
-        s = max(1, self.frontier_stride)
+        s = max(1, self._adaptive_frontier_stride)
         min_area_m2 = self.cfpa2_frontier_min_cluster_area_m2
+        clearance_cells = int(math.ceil(self.cfpa2_frontier_obstacle_clearance_m / res))
         neighbor8 = ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, 1), (1, -1), (-1, -1))
 
         frontier_mask = [False] * (w * h)
@@ -572,8 +685,10 @@ class CFPA2Coordinator(Node):
             for i, (gx, gy) in enumerate(component):
                 if (i % s) != 0:
                     continue
+                if not self._has_frontier_obstacle_clearance(data, gx, gy, w, h, clearance_cells):
+                    continue
                 out.append(self._grid_to_world(msg, gx, gy))
-                if len(out) >= self.max_targets:
+                if len(out) >= self._adaptive_max_targets:
                     return out
         return out
 
@@ -678,6 +793,52 @@ class CFPA2Coordinator(Node):
             f"{ns}: blacklisting goal ({goal[0]:.2f},{goal[1]:.2f}) for {self.blacklist_ttl_sec:.1f}s "
             f"after repeated {reason} failures."
         )
+
+    def _consume_local_nav_stall_blacklists(self, now_ns: int) -> set[str]:
+        if self.local_nav_stall_blacklist_sec <= 0.0 or self.local_nav_status_stale_sec <= 0.0:
+            return set()
+
+        forced_switch: set[str] = set()
+        stale_ns = int(self.local_nav_status_stale_sec * 1e9)
+        for ns in self.namespaces:
+            diag = self.nav_status.get(ns)
+            rx_time_ns = self.nav_status_rx_time_ns.get(ns, 0)
+            if diag is None or rx_time_ns <= 0 or (now_ns - rx_time_ns) > stale_ns:
+                continue
+
+            try:
+                stall_event_count = int(diag.get("stall_event_count", 0))
+            except (TypeError, ValueError):
+                continue
+
+            if stall_event_count <= self.local_nav_last_stall_event_count.get(ns, 0):
+                continue
+            self.local_nav_last_stall_event_count[ns] = stall_event_count
+
+            current_goal = self.last_goal.get(ns)
+            if current_goal is None:
+                continue
+
+            key = self._goal_key(current_goal)
+            until_ns = now_ns + int(self.local_nav_stall_blacklist_sec * 1e9)
+            self.goal_blacklist_until_ns[ns][key] = max(
+                self.goal_blacklist_until_ns[ns].get(key, 0),
+                until_ns,
+            )
+            self.goal_fail_counts[ns][key] = 0
+            self.goal_progress_samples[ns].clear()
+            forced_switch.add(ns)
+
+            mode = str(diag.get("mode", "navigate"))
+            stall_sec = diag.get("stall_sec", "-")
+            self.get_logger().warn(
+                f"{ns}: local nav deadlock event #{stall_event_count} "
+                f"(mode={mode}, stall_sec={stall_sec}) blacklisting current goal "
+                f"({current_goal[0]:.2f},{current_goal[1]:.2f}) for "
+                f"{self.local_nav_stall_blacklist_sec:.1f}s."
+            )
+
+        return forced_switch
 
     def _distance_robot_to_goal(self, ns: str, goal: tuple[float, float]) -> float:
         od = self.odoms[ns]
@@ -1014,7 +1175,11 @@ class CFPA2Coordinator(Node):
             "PERF coordinator: "
             f"tick_ms[p50={p50_ms:.1f} p95={p95_ms:.1f} mean={mean_ms:.1f} max={max_ms:.1f} "
             f"budget={self._tick_period_ms:.1f} over_budget={over_budget}/{sample_count}] "
-            f"cpu={cpu_pct:.1f}%"
+            f"cpu={cpu_pct:.1f}% "
+            f"adaptive[stride={self._adaptive_frontier_stride} "
+            f"targets={self._adaptive_max_targets} "
+            f"gain_r={self._adaptive_exploration_gain_radius_cells} "
+            f"skip={self._adaptive_skip_ticks}]"
         )
 
         if self.perf_tick_warn_p95_ms > 0.0 and p95_ms > self.perf_tick_warn_p95_ms:
@@ -1028,6 +1193,95 @@ class CFPA2Coordinator(Node):
                 f"CPU {cpu_pct:.1f}% > {self.perf_cpu_warn_pct:.1f}% single-core budget"
             )
 
+        self._update_adaptive_load_shedding(
+            p95_ms=p95_ms,
+            cpu_pct=cpu_pct,
+            over_budget=over_budget,
+            sample_count=sample_count,
+        )
+
+    def _update_adaptive_load_shedding(
+        self,
+        *,
+        p95_ms: float,
+        cpu_pct: float,
+        over_budget: int,
+        sample_count: int,
+    ) -> None:
+        if not self.adaptive_load_shedding_enabled:
+            return
+
+        budget_ms = max(1.0, self._tick_period_ms)
+        over_budget_ratio = float(over_budget) / max(1, sample_count)
+        cpu_budget_pct = self.perf_cpu_warn_pct if self.perf_cpu_warn_pct > 0.0 else 100.0
+        p95_util = p95_ms / budget_ms
+        cpu_util = cpu_pct / max(1.0, cpu_budget_pct)
+        overloaded = (
+            p95_util > self.adaptive_budget_utilization
+            or over_budget_ratio > 0.35
+            or cpu_util > 1.0
+        )
+        healthy = (
+            p95_util < self.adaptive_restore_utilization
+            and over_budget_ratio < 0.10
+            and cpu_util < 0.8
+        )
+
+        changed = False
+        if overloaded:
+            if self._adaptive_frontier_stride < self.adaptive_max_frontier_stride:
+                self._adaptive_frontier_stride += 1
+                changed = True
+            if self._adaptive_max_targets > self.adaptive_min_max_targets:
+                reduced_targets = max(
+                    self.adaptive_min_max_targets,
+                    int(math.floor(self._adaptive_max_targets * 0.75)),
+                )
+                if reduced_targets != self._adaptive_max_targets:
+                    self._adaptive_max_targets = reduced_targets
+                    changed = True
+            if self._adaptive_exploration_gain_radius_cells > self.adaptive_min_exploration_gain_radius_cells:
+                self._adaptive_exploration_gain_radius_cells -= 1
+                changed = True
+            if self._adaptive_skip_ticks < self.adaptive_max_skip_ticks:
+                self._adaptive_skip_ticks += 1
+                changed = True
+            if changed:
+                self.get_logger().warn(
+                    "Adaptive CFPA2 load shedding increased: "
+                    f"stride={self._adaptive_frontier_stride} "
+                    f"targets={self._adaptive_max_targets} "
+                    f"gain_r={self._adaptive_exploration_gain_radius_cells} "
+                    f"skip={self._adaptive_skip_ticks} "
+                    f"(p95={p95_ms:.1f}ms budget={budget_ms:.1f}ms cpu={cpu_pct:.1f}%)"
+                )
+            return
+
+        if healthy:
+            if self._adaptive_skip_ticks > 0:
+                self._adaptive_skip_ticks -= 1
+                changed = True
+            elif self._adaptive_exploration_gain_radius_cells < self.exploration_gain_radius_cells:
+                self._adaptive_exploration_gain_radius_cells += 1
+                changed = True
+            elif self._adaptive_max_targets < self.max_targets:
+                self._adaptive_max_targets = min(
+                    self.max_targets,
+                    int(math.ceil(self._adaptive_max_targets / 0.75)),
+                )
+                changed = True
+            elif self._adaptive_frontier_stride > self.frontier_stride:
+                self._adaptive_frontier_stride -= 1
+                changed = True
+            if changed:
+                self.get_logger().info(
+                    "Adaptive CFPA2 load shedding relaxed: "
+                    f"stride={self._adaptive_frontier_stride} "
+                    f"targets={self._adaptive_max_targets} "
+                    f"gain_r={self._adaptive_exploration_gain_radius_cells} "
+                    f"skip={self._adaptive_skip_ticks}"
+                )
+
     def _record_tick_perf(self, tick_start_ns: int) -> None:
         if not self.perf_enable:
             return
@@ -1037,10 +1291,18 @@ class CFPA2Coordinator(Node):
 
     def _tick(self) -> None:
         tick_start_ns = time.perf_counter_ns()
+        skipped = False
         try:
+            if self._adaptive_skip_ticks > 0:
+                if self._adaptive_tick_skip_counter < self._adaptive_skip_ticks:
+                    self._adaptive_tick_skip_counter += 1
+                    skipped = True
+                    return
+                self._adaptive_tick_skip_counter = 0
             self._tick_impl()
         finally:
-            self._record_tick_perf(tick_start_ns)
+            if not skipped:
+                self._record_tick_perf(tick_start_ns)
 
     def _publish_goal(self, ns: str, map_msg: OccupancyGrid, goal_w: tuple[float, float]) -> None:
         if not self._goal_is_finite(goal_w):
@@ -1245,7 +1507,7 @@ class CFPA2Coordinator(Node):
         w = int(msg.info.width)
         h = int(msg.info.height)
         data = msg.data
-        r = self.exploration_gain_radius_cells
+        r = self._adaptive_exploration_gain_radius_cells
         gain = 0.0
         for yy in range(max(0, gy - r), min(h, gy + r + 1)):
             row = yy * w
@@ -2100,6 +2362,8 @@ class CFPA2Coordinator(Node):
             if self.algorithm_mode == "committed":
                 self._update_progress_samples(ns, now_ns)
 
+        local_nav_forced_switch_namespaces = self._consume_local_nav_stall_blacklists(now_ns)
+
         if self.algorithm_mode == "cfpa2" and len(self.namespaces) == 2:
             ns_a, ns_b = self.namespaces[0], self.namespaces[1]
             map_a = planning_map if using_shared_map else self.maps.get(ns_a)
@@ -2197,7 +2461,7 @@ class CFPA2Coordinator(Node):
                     assignment_scores[best_single_ns] = best_single_score
                     self._set_policy_reason(best_single_ns, "switch/cfpa2_fallback_single")
 
-            forced_switch_namespaces: set[str] = set()
+            forced_switch_namespaces: set[str] = set(local_nav_forced_switch_namespaces)
             for ns in self.namespaces:
                 forced_goal = self._maybe_force_cfpa2_stuck_recovery(
                     ns=ns,

@@ -1,0 +1,50 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>comp0225_qrc_demo_bringup</name>
+  <version>0.1.0</version>
+  <description>Self-contained demo bringup bundle for Gazebo and real-robot CMU-style stacks.</description>
+  <maintainer email="hz@example.com">hz</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>visualization_msgs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+
+  <exec_depend>xacro</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>robot_localization</exec_depend>
+  <exec_depend>gazebo_ros2_control</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+  <exec_depend>joy</exec_depend>
+
+  <exec_depend>champ_base</exec_depend>
+  <exec_depend>champ_gazebo</exec_depend>
+
+  <exec_depend>go2_nav_algorithms</exec_depend>
+  <exec_depend>pointcloud_to_laserscan</exec_depend>
+  <exec_depend>fast_lio</exec_depend>
+
+  <exec_depend>local_planner</exec_depend>
+  <exec_depend>terrain_analysis</exec_depend>
+  <exec_depend>terrain_analysis_ext</exec_depend>
+
+  <exec_depend>point_lio_unilidar</exec_depend>
+  <exec_depend>transform_sensors</exec_depend>
+  <exec_depend>far_planner</exec_depend>
+  <exec_depend>graph_decoder</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

@@ -9,12 +9,14 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(tf2_ros REQUIRED)
 
 add_executable(simple_scan_mapper_cpp src/simple_scan_mapper_cpp.cpp)
 ament_target_dependencies(simple_scan_mapper_cpp
   rclcpp
   nav_msgs
   sensor_msgs
+  tf2_ros
 )
 
 install(DIRECTORY

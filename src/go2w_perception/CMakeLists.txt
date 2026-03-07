@@ -13,6 +13,7 @@ install(PROGRAMS
   scripts/pointcloud_adapter.py
   scripts/twist_bridge.py
   scripts/slam_odom_relay.py
+  scripts/temporal_scan_filter.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

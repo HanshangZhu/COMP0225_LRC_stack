@@ -2,7 +2,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <deque>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -14,6 +13,9 @@
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
+#include "tf2_ros/buffer.h"
+#include "tf2_ros/transform_listener.h"
+#include "tf2_ros/transform_broadcaster.h"
 
 namespace
 {
@@ -35,6 +37,7 @@ public:
     odom_topic_ = declare_parameter<std::string>("odom_topic", "/odom/nav");
     map_topic_ = declare_parameter<std::string>("map_topic", "/map");
     map_frame_ = declare_parameter<std::string>("map_frame", "world");
+    scan_frame_ = declare_parameter<std::string>("scan_frame", "");
     lidar_offset_x_ = declare_parameter<double>("lidar_offset_x", 0.0);
     lidar_offset_y_ = declare_parameter<double>("lidar_offset_y", 0.0);
 
@@ -49,8 +52,8 @@ public:
     clear_on_nohit_ = declare_parameter<bool>("clear_on_nohit", false);
     update_rate_ = std::max(0.5, declare_parameter<double>("update_rate", 4.0));
     startup_delay_ = std::max(0.0, declare_parameter<double>("startup_delay", 4.0));
-    max_scan_odom_dt_ = std::max(0.0, declare_parameter<double>("max_scan_odom_dt", 0.0));
-    odom_history_sec_ = std::max(0.5, declare_parameter<double>("odom_history_sec", 2.0));
+    tf_timeout_ms_ = std::max(1, static_cast<int>(declare_parameter("tf_timeout_ms", 1000)));
+    max_scan_odom_dt_ = std::max(0.0, declare_parameter<double>("max_scan_odom_dt", 0.10));
 
     hit_increment_ = std::max(1, static_cast<int>(declare_parameter("hit_increment", 3)));
     miss_decrement_ = std::max(1, static_cast<int>(declare_parameter("miss_decrement", 1)));
@@ -72,6 +75,13 @@ public:
     scores_.assign(static_cast<size_t>(n_cells), 0);
     observed_.assign(static_cast<size_t>(n_cells), false);
 
+    // TF2: buffer + listener + broadcaster
+    // The odom subscriber feeds the broadcaster so that we have a
+    // map_frame -> base_link transform chain for TF lookup.
+    tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
+    tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+    tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(*this);
+
     const auto scan_qos = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort();
     const auto odom_qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable();
 
@@ -81,22 +91,12 @@ public:
         last_scan_ = msg;
       });
 
+    // Odom sub: broadcast as TF so we can interpolate at scan timestamps
     odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
       odom_topic_, odom_qos,
       [this](const nav_msgs::msg::Odometry::SharedPtr msg) {
         last_odom_ = msg;
-
-        rclcpp::Time stamp(msg->header.stamp);
-        int64_t stamp_ns = stamp.nanoseconds();
-        if (stamp_ns <= 0) {
-          stamp_ns = now().nanoseconds();
-        }
-        odom_hist_.emplace_back(stamp_ns, msg);
-
-        const int64_t prune_before = stamp_ns - static_cast<int64_t>(odom_history_sec_ * 1e9);
-        while (!odom_hist_.empty() && odom_hist_.front().first < prune_before) {
-          odom_hist_.pop_front();
-        }
+        broadcast_odom_tf(msg);
       });
 
     map_pub_ = create_publisher<nav_msgs::msg::OccupancyGrid>(map_topic_, 1);
@@ -106,11 +106,11 @@ public:
 
     RCLCPP_INFO(
       get_logger(),
-      "Simple scan mapper (C++) started | scan=%s odom=%s map=%s size=%dx%d res=%.2f "
-      "lidar_offset=(%.3f,%.3f) score=[%d,%d] hit=%d miss=%d odom_history=%.1fs",
+      "Simple scan mapper (C++, TF-based) started | scan=%s odom=%s map=%s size=%dx%d res=%.2f "
+      "lidar_offset=(%.3f,%.3f) score=[%d,%d] hit=%d miss=%d tf_timeout=%dms",
       scan_topic_.c_str(), odom_topic_.c_str(), map_topic_.c_str(), width_, height_, resolution_,
       lidar_offset_x_, lidar_offset_y_, score_min_, score_max_, hit_increment_, miss_decrement_,
-      odom_history_sec_);
+      tf_timeout_ms_);
   }
 
 private:
@@ -141,8 +141,6 @@ private:
     scores_[i] = score;
   }
 
-  // Carve free space with Bresenham and skip endpoint so occupied mark can be
-  // applied separately.
   void raytrace_free(int x0, int y0, int x1, int y1)
   {
     int dx = std::abs(x1 - x0);
@@ -178,27 +176,18 @@ private:
     }
   }
 
-  std::pair<OdomMsg::SharedPtr, double> select_odom_for_scan(const ScanMsg::SharedPtr & scan) const
+  // Broadcast odom as TF so the buffer can interpolate for scan timestamps
+  void broadcast_odom_tf(const OdomMsg::SharedPtr & msg)
   {
-    if (odom_hist_.empty()) {
-      return {last_odom_, std::numeric_limits<double>::infinity()};
-    }
-
-    const int64_t scan_t = rclcpp::Time(scan->header.stamp).nanoseconds();
-    if (scan_t <= 0) {
-      return {last_odom_, 0.0};
-    }
-
-    OdomMsg::SharedPtr best_msg;
-    double best_dt = std::numeric_limits<double>::infinity();
-    for (const auto & [odom_t, odom_msg] : odom_hist_) {
-      const double dt = std::abs(static_cast<double>(scan_t - odom_t)) / 1e9;
-      if (dt < best_dt) {
-        best_dt = dt;
-        best_msg = odom_msg;
-      }
-    }
-    return {best_msg, best_dt};
+    geometry_msgs::msg::TransformStamped t;
+    t.header.stamp = msg->header.stamp;
+    t.header.frame_id = map_frame_;
+    t.child_frame_id = "base_link";
+    t.transform.translation.x = msg->pose.pose.position.x;
+    t.transform.translation.y = msg->pose.pose.position.y;
+    t.transform.translation.z = msg->pose.pose.position.z;
+    t.transform.rotation = msg->pose.pose.orientation;
+    tf_broadcaster_->sendTransform(t);
   }
 
   void publish_map(const builtin_interfaces::msg::Time & stamp)
@@ -244,29 +233,69 @@ private:
     }
 
     const auto scan = last_scan_;
-    const auto [odom, matched_dt] = select_odom_for_scan(scan);
-    if (!odom) {
-      return;
-    }
-    last_match_dt_ = matched_dt;
+    const auto odom = last_odom_;
 
-    if (max_scan_odom_dt_ > 0.0 && std::isfinite(matched_dt) && matched_dt > max_scan_odom_dt_) {
-      if ((now_t.nanoseconds() - last_sync_warn_ns_) > static_cast<int64_t>(2e9)) {
-        RCLCPP_WARN(
-          get_logger(), "scan/odom desync: dt=%.3fs > %.3fs; skipping map update",
-          matched_dt, max_scan_odom_dt_);
-        last_sync_warn_ns_ = now_t.nanoseconds();
+    // Gate: reject scan-odom pairs with too much timestamp difference.
+    // Without this, the mapper can pair a scan with stale odom, placing
+    // it at the wrong position (causes map flickering/starburst).
+    {
+      const double scan_t = rclcpp::Time(scan->header.stamp).seconds();
+      const double odom_t = rclcpp::Time(odom->header.stamp).seconds();
+      const double dt = std::abs(scan_t - odom_t);
+      if (dt > max_scan_odom_dt_) {
+        if ((now_t.nanoseconds() - last_tf_warn_ns_) > static_cast<int64_t>(3e9)) {
+          RCLCPP_WARN(get_logger(),
+            "Dropping scan: scan-odom dt=%.3fs exceeds max_scan_odom_dt=%.3fs",
+            dt, max_scan_odom_dt_);
+          last_tf_warn_ns_ = now_t.nanoseconds();
+        }
+        return;
+      }
+    }
+
+    // Determine scan frame: use parameter override, else scan header
+    const std::string lookup_frame = scan_frame_.empty()
+      ? scan->header.frame_id
+      : scan_frame_;
+
+    // TF-based pose lookup: interpolates odom at the exact scan timestamp.
+    // We wait up to tf_timeout_ms for the transform to become available.
+    // If it fails (scan timestamp too far ahead of TF data), we DROP the scan
+    // rather than using a stale TF — placing scans at the wrong pose causes
+    // map flickering and doubled structures.
+    geometry_msgs::msg::TransformStamped transform;
+    try {
+      transform = tf_buffer_->lookupTransform(
+        map_frame_, lookup_frame,
+        scan->header.stamp,
+        std::chrono::milliseconds(tf_timeout_ms_));
+    } catch (const tf2::TransformException & ex) {
+      if ((now_t.nanoseconds() - last_tf_warn_ns_) > static_cast<int64_t>(3e9)) {
+        RCLCPP_WARN(get_logger(), "TF lookup failed (%s -> %s): %s",
+          map_frame_.c_str(), lookup_frame.c_str(), ex.what());
+        last_tf_warn_ns_ = now_t.nanoseconds();
       }
       return;
     }
 
-    const double rx = odom->pose.pose.position.x;
-    const double ry = odom->pose.pose.position.y;
+    const double rx = transform.transform.translation.x;
+    const double ry = transform.transform.translation.y;
     const double yaw = yaw_from_quat(
-      odom->pose.pose.orientation.x,
-      odom->pose.pose.orientation.y,
-      odom->pose.pose.orientation.z,
-      odom->pose.pose.orientation.w);
+      transform.transform.rotation.x,
+      transform.transform.rotation.y,
+      transform.transform.rotation.z,
+      transform.transform.rotation.w);
+
+    // Diagnostic: log every scan update to detect yaw jumps / timestamp issues
+    {
+      const double scan_t = rclcpp::Time(scan->header.stamp).seconds();
+      const double odom_t = rclcpp::Time(odom->header.stamp).seconds();
+      const double tf_t = rclcpp::Time(transform.header.stamp).seconds();
+      RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 2000,
+        "MAPPER_DIAG: pose=(%.2f, %.2f, yaw=%.1f°) scan_t=%.3f odom_t=%.3f tf_t=%.3f dt_so=%.3f dt_st=%.3f",
+        rx, ry, yaw * 57.2958, scan_t, odom_t, tf_t,
+        scan_t - odom_t, scan_t - tf_t);
+    }
 
     // Ray origin from physical lidar mount, not base center.
     const double sx = rx + (std::cos(yaw) * lidar_offset_x_ - std::sin(yaw) * lidar_offset_y_);
@@ -320,6 +349,11 @@ private:
 
     publish_map(scan->header.stamp);
 
+    // CRITICAL: clear the scan so it's only painted ONCE. Without this,
+    // the timer re-paints the same scan with newer odom poses on each tick,
+    // creating starburst/doubled-wall artifacts.
+    last_scan_.reset();
+
     if (last_summary_ns_ == 0 || (now_t.nanoseconds() - last_summary_ns_) > static_cast<int64_t>(10e9)) {
       last_summary_ns_ = now_t.nanoseconds();
       int free_n = 0;
@@ -333,8 +367,8 @@ private:
       }
       const int unknown_n = static_cast<int>(grid_.size()) - free_n - occ_n;
       RCLCPP_INFO(
-        get_logger(), "MAP step: free=%d occ=%d unknown=%d matched_dt=%.3fs",
-        free_n, occ_n, unknown_n, last_match_dt_);
+        get_logger(), "MAP step: free=%d occ=%d unknown=%d (TF-based)",
+        free_n, occ_n, unknown_n);
     }
   }
 
@@ -342,6 +376,7 @@ private:
   std::string odom_topic_;
   std::string map_topic_;
   std::string map_frame_;
+  std::string scan_frame_;
 
   double lidar_offset_x_{0.0};
   double lidar_offset_y_{0.0};
@@ -356,8 +391,8 @@ private:
   bool clear_on_nohit_{false};
   double update_rate_{4.0};
   double startup_delay_{4.0};
-  double max_scan_odom_dt_{0.0};
-  double odom_history_sec_{2.0};
+  int tf_timeout_ms_{1000};
+  double max_scan_odom_dt_{0.10};
 
   int hit_increment_{3};
   int miss_decrement_{1};
@@ -372,12 +407,14 @@ private:
 
   ScanMsg::SharedPtr last_scan_;
   OdomMsg::SharedPtr last_odom_;
-  std::deque<std::pair<int64_t, OdomMsg::SharedPtr>> odom_hist_;
+
+  std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
+  std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+  std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 
   std::optional<rclcpp::Time> start_time_;
-  int64_t last_sync_warn_ns_{0};
+  int64_t last_tf_warn_ns_{0};
   int64_t last_summary_ns_{0};
-  double last_match_dt_{0.0};
 
   rclcpp::Subscription<ScanMsg>::SharedPtr scan_sub_;
   rclcpp::Subscription<OdomMsg>::SharedPtr odom_sub_;

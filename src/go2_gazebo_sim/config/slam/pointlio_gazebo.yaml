@@ -1,6 +1,7 @@
-# FAST-LIO2 configuration for Gazebo simulation (Go2 with 3D LiDAR)
-# Sensor: go2_description_3d_lidar.xacro gpu_ray (Velodyne-style, 1024x16, 10Hz)
-# IMU:    gazebo.xacro imu_sensor (100Hz, on imu_link = trunk)
+# FAST-LIO2 configuration for Gazebo simulation (Go2W with 3D LiDAR)
+# Sensor: go2w_description_3d_lidar.xacro gpu_ray (1024x16, 10Hz)
+# IMU:    gazebo imu_sensor (100Hz, on imu frame)
+# LiDAR mount: imu → livox_mid360 at T=[0.187, 0, 0.0803] Ry(13°)
 #
 # NOTE: Must use the /**:/ros__parameters: wrapper for ROS 2 param loading.
 
@@ -25,24 +26,25 @@
             lidar_type: 2                     # 2 = Velodyne-style (unorganised PointCloud2)
             scan_line: 16                     # URDF: 16 vertical samples
             scan_rate: 10                     # URDF: update_rate 10 Hz
-            timestamp_unit: 2                 # 0=sec 1=ms 2=us 3=ns.  Gazebo uses microseconds.
-            blind: 0.3                        # ignore points closer than 0.3m (self-collision filter)
+            timestamp_unit: 2                 # 0=sec 1=ms 2=us 3=ns
+            blind: 0.4                        # reject self-observation of robot body
 
         mapping:
-            acc_cov: 0.1
-            gyr_cov: 0.1
-            b_acc_cov: 0.0001
-            b_gyr_cov: 0.0001
+            acc_cov: 0.5                      # loosened 5x for Gazebo IMU noise
+            gyr_cov: 0.5                      # loosened 5x for Gazebo IMU noise
+            b_acc_cov: 0.001                  # loosened 10x for sim bias drift
+            b_gyr_cov: 0.001                  # loosened 10x for sim bias drift
             fov_degree: 360.0                 # full 360 horizontal scan
             det_range: 20.0                   # match URDF max range
             extrinsic_est_en: false           # fixed extrinsics (known from URDF)
-            # Extrinsic: lidar_3d_link relative to imu_link
-            # From URDF: lidar_3d_joint origin xyz="0.20 0.0 0.25" rpy="0 0 0"
-            # imu_link is co-located with trunk (imu_joint origin 0 0 0)
-            extrinsic_T: [0.20, 0.0, 0.25]
-            extrinsic_R: [1.0, 0.0, 0.0,
-                          0.0, 1.0, 0.0,
-                          0.0, 0.0, 1.0]
+            # Extrinsic: LiDAR frame → IMU frame (from Go2W URDF)
+            # imu_joint:  base → imu at xyz=(-0.02557, 0, 0.04232)
+            # livox_joint: imu → livox_mid360 at xyz=(0.187, 0, 0.0803) rpy=(0, 0.2269, 0)
+            # R = Ry(0.2269): cos=0.9744, sin=0.2249
+            extrinsic_T: [0.187, 0.0, 0.0803]
+            extrinsic_R: [0.9744,  0.0, 0.2249,
+                          0.0,     1.0, 0.0,
+                         -0.2249,  0.0, 0.9744]
 
         publish:
             path_en: true
@@ -53,3 +55,4 @@
         pcd_save:
             pcd_save_en: false
             interval: -1
+

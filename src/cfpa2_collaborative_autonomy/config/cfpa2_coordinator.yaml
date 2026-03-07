@@ -6,6 +6,7 @@
     tare_goal_topic_suffix: /way_point_tare
     relocation_goal_topic_suffix: /goal_point
     grid_world_status_topic_suffix: /grid_world_status
+    nav_status_topic_suffix: /nav_status
     use_shared_map: false
     shared_map_topic: /disco_slam/global_map
     shared_map_wait_sec: 8.0
@@ -26,6 +27,8 @@
     cfpa2_stuck_lock_sec: 45.0
     cfpa2_stuck_min_motion_m: 0.20
     cfpa2_stuck_blacklist_sec: 60.0
+    local_nav_status_stale_sec: 3.0
+    local_nav_stall_blacklist_sec: 45.0
     cfpa2_close_stop_radius_m: 0.35
     cfpa2_close_stop_speed_epsilon: 0.02
     cfpa2_space_time_enabled: true

@@ -6,14 +6,15 @@ import math
 
 import rclpy
 from geometry_msgs.msg import PointStamped, PoseStamped, TwistStamped
-from nav_msgs.msg import Odometry, Path
+from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy, HistoryPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Empty, Int8, String
 from visualization_msgs.msg import Marker
 
 from reactive_nav_core import GoalState, NavRuntimeState, ReactiveNavConfig, ReactiveNavCoordinator, RobotState
+from reactive_nav_core.grid_planner import AsyncGridPlanner, OccGridInfo
 
 
 class ReactiveNav(Node):
@@ -46,6 +47,16 @@ class ReactiveNav(Node):
         self.teammate_y: float | None = None
         self.teammate_speed: float = 0.0
         self.last_teammate_odom_rx_sec: float | None = None
+
+        # Global map for A* grid planning (runs in background thread)
+        self.last_map: OccupancyGrid | None = None
+        self.last_map_stamp_sec: float = 0.0
+        self.grid_planner = AsyncGridPlanner(
+            inflation_m=0.25,
+            waypoint_spacing_m=0.4,
+            replan_interval_sec=2.0,
+            goal_shift_threshold_m=0.3,
+        )
 
         self.declare_parameter("debug_stall_warn_sec", 6.0)
         self.declare_parameter("debug_stall_warn_period_sec", 6.0)
@@ -92,14 +103,33 @@ class ReactiveNav(Node):
         self.create_subscription(Int8, self.cfg.stop_topic, self.stop_cb, 10)
         self._setup_teammate_subscription()
 
+        # Subscribe to occupancy grid for global A* planning
+        map_topic = self.declare_parameter("map_topic", "").value or ""
+        if not map_topic:
+            ns = self.get_namespace().strip("/")
+            map_topic = f"/{ns}/map" if ns else "/map"
+        map_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+        self.create_subscription(OccupancyGrid, map_topic, self._map_cb, map_qos)
+        self.get_logger().info(f"Grid planner: subscribing to map on {map_topic}")
+
         self.cmd_pub = self.create_publisher(TwistStamped, "/cmd_vel_stamped", 10)
         self.replan_pub = self.create_publisher(Empty, self.cfg.frontier_replan_topic, 10)
         self.status_pub = self.create_publisher(String, "/nav_status", 10)
         self.final_goal_marker_pub = self.create_publisher(Marker, "/final_goal_marker", 10)
         self.planned_path_pub = self.create_publisher(Path, "/planned_path", 10)
+        self.robot_pose_marker_pub = self.create_publisher(Marker, "/robot_pose_marker", 10)
 
         self.timer = self.create_timer(1.0 / self.cfg.control_rate, self.control_loop)
         self.get_logger().info("Reactive nav started")
+
+    def _map_cb(self, msg: OccupancyGrid) -> None:
+        self.last_map = msg
+        self.last_map_stamp_sec = self.get_clock().now().nanoseconds / 1e9
 
     def goal_cb(self, msg: PointStamped) -> None:
         self.goal_state.x = msg.point.x
@@ -110,6 +140,7 @@ class ReactiveNav(Node):
         self.runtime_state.plan_waypoints_world = []
         self.runtime_state.plan_last_time_sec = None
         self.runtime_state.plan_last_goal = None
+        self.grid_planner.force_replan()  # force grid re-plan on new goal
         goal_xy = (float(self.goal_state.x), float(self.goal_state.y))
         if self.last_goal_xy is None:
             self.get_logger().info(f"New goal[#{self.goal_msg_seq}]: ({goal_xy[0]:.2f}, {goal_xy[1]:.2f})")
@@ -144,9 +175,46 @@ class ReactiveNav(Node):
         self.last_stop_rx_sec = self.get_clock().now().nanoseconds / 1e9
         self.stop_msg_count += 1
 
+    def _try_grid_plan(self, now_sec: float) -> None:
+        """Poll async A* grid planner (non-blocking)."""
+        if self.last_map is None:
+            return
+        if self.goal_state.x is None or self.goal_state.y is None:
+            return
+
+        m = self.last_map
+        import numpy as np
+        arr = np.array(m.data, dtype=np.int8).reshape(m.info.height, m.info.width)
+        info = OccGridInfo(
+            resolution=m.info.resolution,
+            width=m.info.width,
+            height=m.info.height,
+            origin_x=m.info.origin.position.x,
+            origin_y=m.info.origin.position.y,
+            data=arr,
+        )
+
+        result = self.grid_planner.request_plan(
+            now_sec=now_sec,
+            info=info,
+            robot_x=self.robot_state.x,
+            robot_y=self.robot_state.y,
+            goal_x=float(self.goal_state.x),
+            goal_y=float(self.goal_state.y),
+            map_stamp_sec=self.last_map_stamp_sec,
+        )
+
+        if result is not None and result.success and result.waypoints_world:
+            self.runtime_state.plan_waypoints_world = result.waypoints_world
+            self.runtime_state.plan_last_time_sec = now_sec
+            self.runtime_state.plan_last_goal = (float(self.goal_state.x), float(self.goal_state.y))
+
     def control_loop(self) -> None:
         now = self.get_clock().now()
         now_sec = now.nanoseconds / 1e9
+
+        # Run global A* grid planner (updates plan_waypoints_world)
+        self._try_grid_plan(now_sec)
 
         result = self.coordinator.tick(
             now_sec=now_sec,
@@ -336,6 +404,7 @@ class ReactiveNav(Node):
         frame_id = self.goal_frame_id or "world"
         self._publish_final_goal_marker(stamp_msg, frame_id)
         self._publish_planned_path(stamp_msg, frame_id)
+        self._publish_robot_pose_marker(stamp_msg, frame_id)
 
     def _publish_final_goal_marker(self, stamp_msg, frame_id: str) -> None:
         marker = Marker()
@@ -375,6 +444,12 @@ class ReactiveNav(Node):
             self.planned_path_pub.publish(path)
             return
 
+        # Only show A* planned waypoints — don't draw fallback straight line
+        # through walls when there's no valid plan.
+        if not self.runtime_state.plan_waypoints_world:
+            self.planned_path_pub.publish(path)
+            return
+
         points: list[tuple[float, float]] = []
         if math.isfinite(self.robot_state.x) and math.isfinite(self.robot_state.y):
             points.append((float(self.robot_state.x), float(self.robot_state.y)))
@@ -383,12 +458,9 @@ class ReactiveNav(Node):
             points.append((float(wx), float(wy)))
 
         goal_xy = (float(self.goal_state.x), float(self.goal_state.y))
-        if not points:
+        last = points[-1] if points else (0.0, 0.0)
+        if math.hypot(goal_xy[0] - last[0], goal_xy[1] - last[1]) > 0.05:
             points.append(goal_xy)
-        else:
-            last = points[-1]
-            if math.hypot(goal_xy[0] - last[0], goal_xy[1] - last[1]) > 0.05:
-                points.append(goal_xy)
 
         for wx, wy in points:
             pose = PoseStamped()
@@ -400,6 +472,49 @@ class ReactiveNav(Node):
             path.poses.append(pose)
 
         self.planned_path_pub.publish(path)
+
+    def _publish_robot_pose_marker(self, stamp_msg, frame_id: str) -> None:
+        marker = Marker()
+        marker.header.stamp = stamp_msg
+        marker.header.frame_id = frame_id
+        marker.ns = "robot_pose"
+        marker.id = 0
+        marker.type = Marker.TRIANGLE_LIST
+        marker.action = Marker.ADD
+        marker.pose.orientation.w = 1.0
+        marker.scale.x = 1.0
+        marker.scale.y = 1.0
+        marker.scale.z = 1.0
+        # Cyan triangle, semi-transparent
+        marker.color.r = 0.0
+        marker.color.g = 0.9
+        marker.color.b = 1.0
+        marker.color.a = 0.85
+
+        # Build triangle pointing in yaw direction
+        yaw = self.robot_state.yaw
+        cx, cy = float(self.robot_state.x), float(self.robot_state.y)
+        size = 0.25  # triangle size in meters
+
+        from geometry_msgs.msg import Point
+        # Front tip
+        p0 = Point()
+        p0.x = cx + size * math.cos(yaw)
+        p0.y = cy + size * math.sin(yaw)
+        p0.z = 0.05
+        # Rear left
+        p1 = Point()
+        p1.x = cx + size * 0.5 * math.cos(yaw + 2.5)
+        p1.y = cy + size * 0.5 * math.sin(yaw + 2.5)
+        p1.z = 0.05
+        # Rear right
+        p2 = Point()
+        p2.x = cx + size * 0.5 * math.cos(yaw - 2.5)
+        p2.y = cy + size * 0.5 * math.sin(yaw - 2.5)
+        p2.z = 0.05
+
+        marker.points = [p0, p1, p2]
+        self.robot_pose_marker_pub.publish(marker)
 
     @staticmethod
     def _yaw_from_quat(x: float, y: float, z: float, w: float) -> float:

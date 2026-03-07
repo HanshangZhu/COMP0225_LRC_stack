@@ -106,12 +106,13 @@ class PointCloudAdapter(Node):
             0, self.num_rings - 1
         )
 
-        # Time field: compute per-point time offset within scan
-        # Use angular position to estimate relative time within one revolution
-        # Points at the start of the scan get time=0, end gets time~0.1s (at 10Hz)
+        # Time field: Gazebo gpu_ray captures all points instantaneously,
+        # but Fast-LIO needs varying per-point timestamps for scan sorting and
+        # motion undistortion.  The span must be small to minimize distortion:
+        # 10ms total → 0.5mm at 0.5m/s (vs original 100ms → 5cm → doubled walls).
         azimuth = np.arctan2(y, x)  # -pi to pi
         azimuth_normalized = (azimuth + math.pi) / (2.0 * math.pi)  # 0 to 1
-        time_offset = (azimuth_normalized * 100000.0).astype(np.float32)  # microseconds
+        time_offset = (azimuth_normalized * 10000.0).astype(np.float32)  # 0-10ms in μs
 
         # Build output: x(4) y(4) z(4) intensity(4) time(4) ring(2) padding(2) = 24 bytes
         out_point_step = 24

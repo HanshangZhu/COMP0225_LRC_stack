@@ -9,8 +9,8 @@
     side_check_angle_deg: 50.0
     avoidance_gain: 0.9
     control_rate: 15.0
-    startup_delay: 12.0
-    require_settle_before_motion: true
+    startup_delay: 3.0
+    require_settle_before_motion: false
     settle_speed_threshold: 0.12
     settle_hold_sec: 1.5
     avoidance_deadband: 0.08
@@ -18,7 +18,7 @@
     avoidance_conflict_scale: 0.30
     turn_in_place_on_block: true
     wall_scan_enabled: true
-    wall_scan_trigger_dist: 0.34
+    wall_scan_trigger_dist: 0.28
     wall_scan_turn_speed: 0.7
     wall_scan_total_angle_deg: 360.0
     wall_scan_rearm_dist: 0.6
