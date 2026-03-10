@@ -1,11 +1,11 @@
 /*
- * astar_grid.cpp — Fast A* on a 2D boolean grid.
+ * astar_grid.cpp — Fast A* on a 2D grid with optional proximity cost.
  *
  * Compiled as a shared library, loaded by Python via ctypes.
  * Provides extern "C" interface for grid-based A* pathfinding.
  *
  * Build:
- *   g++ -O2 -shared -fPIC -o astar_grid.cpython.so astar_grid.cpp
+ *   g++ -O2 -shared -fPIC -o astar_grid.so astar_grid.cpp
  */
 
 #include <cmath>
@@ -15,7 +15,7 @@
 #include <vector>
 
 /* ------------------------------------------------------------------ */
-/*  A* on a flat boolean grid (row-major, True = blocked)             */
+/*  A* on a flat grid with proximity cost (row-major)                 */
 /* ------------------------------------------------------------------ */
 
 struct Node {
@@ -39,7 +39,7 @@ static constexpr float COST[] = {1.0f, 1.0f, 1.0f, 1.0f,
 extern "C" {
 
 /*
- * astar_grid — Run A* from (sx,sy) to (gx,gy) on a boolean grid.
+ * astar_grid — Run A* from (sx,sy) to (gx,gy) on a grid.
  *
  * Parameters:
  *   blocked      — row-major uint8 grid (H rows × W cols), nonzero = blocked
@@ -50,11 +50,14 @@ extern "C" {
  *   path_y_out   — output buffer for y-coordinates of path
  *   max_path_len — capacity of output buffers
  *   max_cells    — search budget (max nodes to expand)
+ *   cells_explored_out — output: number of cells expanded
+ *   cost_grid    — optional row-major uint8 cost array (NULL = no extra cost).
+ *                  Values 0-252 are added to edge cost as cost_grid[ni] / 252.0.
+ *                  This adds up to 1.0 extra cost per cell traversed.
  *
  * Returns:
  *   path length (number of cells), or 0 if no path found.
  *   Path is from start to goal (inclusive), written to path_x_out/path_y_out.
- *   Also returns cells_explored via pointer.
  */
 int astar_grid(
     const uint8_t *blocked,
@@ -64,7 +67,8 @@ int astar_grid(
     int *path_x_out, int *path_y_out,
     int max_path_len,
     int max_cells,
-    int *cells_explored_out
+    int *cells_explored_out,
+    const uint8_t *cost_grid   /* nullable — proximity cost */
 ) {
     if (sx < 0 || sx >= W || sy < 0 || sy >= H) return 0;
     if (gx < 0 || gx >= W || gy < 0 || gy >= H) return 0;
@@ -88,6 +92,9 @@ int astar_grid(
     int explored = 0;
     bool found = false;
 
+    // Precompute 1/252 for cost scaling
+    constexpr float COST_SCALE = 1.0f / 252.0f;
+
     while (!open.empty() && explored < max_cells) {
         Node cur = open.top();
         open.pop();
@@ -110,6 +117,10 @@ int astar_grid(
             if (blocked[ni] || closed[ni]) continue;
 
             float ng = cur.g + COST[d];
+            // Add proximity cost: cost_grid value scaled to [0, 1.0]
+            if (cost_grid) {
+                ng += static_cast<float>(cost_grid[ni]) * COST_SCALE;
+            }
             if (ng < g_score[ni]) {
                 g_score[ni] = ng;
                 came_from[ni] = ci;

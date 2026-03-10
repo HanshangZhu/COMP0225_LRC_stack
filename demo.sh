@@ -103,8 +103,17 @@ fi
 # --------------------------------------------------------------------------- #
 # Launch single Go2W Gazebo with CFPA2
 # --------------------------------------------------------------------------- #
+# CFPA2 utility weights — tune here to control frontier selection:
+#   cfpa2_w_ig       : info-gain weight   (lower → less pull from far "big" frontiers)
+#   cfpa2_w_c        : distance-cost weight (higher → strongly prefer nearby frontiers)
+#   cfpa2_w_momentum : heading momentum    (higher → avoid turning back)
+#   cfpa2_min_utility: stop threshold      (best utility below this → robot holds position)
 exec ros2 launch go2_gazebo_sim single_go2w_gazebo_cfpa2.launch.py \
   gui:=true \
   rviz:=true \
   cleanup_stale:=false \
+  cfpa2_w_ig:=0.5 \
+  cfpa2_w_c:=0.8 \
+  cfpa2_w_momentum:=2.5 \
+  cfpa2_min_utility:=-1.0 \
   "$@"

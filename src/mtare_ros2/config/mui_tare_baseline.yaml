@@ -1,0 +1,37 @@
+mtare_coordinator:
+  ros__parameters:
+    algorithm_mode: mui_tare
+    publish_rate: 1.0
+    output_mode: waypoint_coord
+    tare_goal_topic_suffix: /way_point_tare
+    relocation_goal_topic_suffix: /goal_point
+    grid_world_status_topic_suffix: /grid_world_status
+    use_shared_map: false
+    shared_map_topic: /disco_slam/global_map
+    shared_map_wait_sec: 8.0
+    shared_map_local_patch_radius_m: 2.5
+    goal_topic_suffix: /way_point_coord
+    marker_frame_override: world
+    frontier_stride: 2
+    max_targets: 800
+    switch_hysteresis: 0.50
+    switch_min_dist: 0.80
+    min_assign_distance: 0.30
+    overlap_weight: 1.0
+    communication_timeout_sec: 6.0
+    prediction_horizon_sec: 4.0
+    pursuit_weight: 2.0
+    pursuit_switch_margin: 0.10
+    exploration_gain_radius_cells: 4
+    meeting_min_distance: 1.5
+    teammate_stale_ttl_sec: 120.0
+    mui_resolve_period_sec: 15.0
+    mui_mdvrp_time_limit_sec: 1.0
+    mui_max_exploring_cells: 120
+    mui_cell_merge_resolution_m: 1.0
+    mui_unreachable_penalty_m: 200.0
+    perf_enable: true
+    perf_tick_window_size: 240
+    perf_min_samples: 20
+    perf_tick_warn_p95_ms: 150.0
+    perf_cpu_warn_pct: 15.0

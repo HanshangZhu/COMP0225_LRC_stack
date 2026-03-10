@@ -36,6 +36,7 @@ install(PROGRAMS
   scripts/simple_frontier_explorer.py
   scripts/multi_robot_goal_assigner.py
   scripts/geometric_frontier.py
+  scripts/gbplanner2_local.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

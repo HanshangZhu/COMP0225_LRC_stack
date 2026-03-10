@@ -173,11 +173,25 @@ class LocalPlanner:
                 result.planner_mode = "direct_fallback"
                 return result
 
-        keep = []
-        for wx, wy in runtime_state.plan_waypoints_world:
-            if math.hypot(wx - robot_state.x, wy - robot_state.y) > self.cfg.planner_waypoint_spacing * 0.6:
-                keep.append((wx, wy))
-        runtime_state.plan_waypoints_world = keep
+        # ── Path shortcut: find closest waypoint, skip all prior ones ──
+        # O(n) scan — negligible for typical 10-50 waypoint paths.
+        # If the robot drifts near waypoint #5, skip #1-#4 instead of
+        # backtracking.  Then drop any waypoints within reach radius.
+        wps = runtime_state.plan_waypoints_world
+        if wps:
+            best_idx = 0
+            best_d2 = float("inf")
+            for i, (wx, wy) in enumerate(wps):
+                d2 = (wx - robot_state.x) ** 2 + (wy - robot_state.y) ** 2
+                if d2 < best_d2:
+                    best_d2 = d2
+                    best_idx = i
+            # Keep from closest onward, then drop any within reach radius
+            wps = wps[best_idx:]
+            reach = self.cfg.planner_waypoint_spacing * 0.6
+            while wps and math.hypot(wps[0][0] - robot_state.x, wps[0][1] - robot_state.y) < reach:
+                wps.pop(0)
+        runtime_state.plan_waypoints_world = wps
 
         result.path_world = list(runtime_state.plan_waypoints_world)
 
@@ -257,7 +271,81 @@ class LocalPlanner:
                 for gx, gy in sampled_cells
             ]
 
+        # Wall-repulsion: push waypoints away from nearby obstacles.
+        safety_clearance = getattr(self.cfg, "planner_safety_clearance", 0.45)
+        path_local = self._push_waypoints_from_walls(
+            path_local, grid, safety_clearance,
+        )
+
         return path_local
+
+    def _push_waypoints_from_walls(
+        self,
+        path_local: list[tuple[float, float]],
+        grid: list[list[int]],
+        safety_clearance: float,
+    ) -> list[tuple[float, float]]:
+        """Push waypoints away from nearby obstacles to avoid corner clipping.
+
+        For each waypoint, find the nearest obstacle cells within
+        safety_clearance.  If any are found, compute a repulsion vector and
+        move the waypoint away from the obstacle cluster.
+        """
+        if len(path_local) < 2 or safety_clearance <= 0:
+            return path_local
+
+        res = self.cfg.planner_resolution
+        n = self.cfg.planner_cells
+        search_r = int(math.ceil(safety_clearance / res)) + 1
+        result: list[tuple[float, float]] = [path_local[0]]  # keep start
+
+        for lx, ly in path_local[1:-1]:
+            cell = local_to_grid(lx, ly, res, n)
+            if cell is None:
+                result.append((lx, ly))
+                continue
+            cx, cy = cell
+
+            # Accumulate repulsion from nearby obstacle cells
+            repel_x, repel_y = 0.0, 0.0
+            threat_count = 0
+            for dy in range(-search_r, search_r + 1):
+                for dx in range(-search_r, search_r + 1):
+                    nx, ny = cx + dx, cy + dy
+                    if 0 <= nx < n and 0 <= ny < n and grid[ny][nx] == 100:
+                        dist_cells = math.hypot(dx, dy)
+                        dist_m = dist_cells * res
+                        if dist_m < safety_clearance:
+                            # Weight closer obstacles more heavily
+                            weight = 1.0 - (dist_m / safety_clearance)
+                            if dist_cells > 0.01:
+                                repel_x -= dx / dist_cells * weight
+                                repel_y -= dy / dist_cells * weight
+                            threat_count += 1
+
+            if threat_count == 0:
+                result.append((lx, ly))
+                continue
+
+            # Normalize repulsion vector and push waypoint
+            mag = math.hypot(repel_x, repel_y)
+            if mag < 0.01:
+                result.append((lx, ly))
+                continue
+
+            push_dist = min(safety_clearance * 0.5, res * 3)  # max push ~3 cells
+            new_lx = lx + (repel_x / mag) * push_dist
+            new_ly = ly + (repel_y / mag) * push_dist
+
+            # Only keep if the pushed position is traversable
+            new_cell = local_to_grid(new_lx, new_ly, res, n)
+            if new_cell is not None and self._is_traversable(grid, new_cell[0], new_cell[1]):
+                result.append((new_lx, new_ly))
+            else:
+                result.append((lx, ly))
+
+        result.append(path_local[-1])  # keep goal
+        return result
 
     def _is_plan_still_valid(
         self,

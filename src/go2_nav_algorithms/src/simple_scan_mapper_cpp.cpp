@@ -70,6 +70,12 @@ public:
       occupied_score_threshold_ = 3;
     }
 
+    // Motion compensation parameters
+    pose_filter_alpha_ = std::clamp(
+      declare_parameter<double>("pose_filter_alpha", 0.7), 0.1, 1.0);
+    max_angular_velocity_ = std::max(
+      0.0, declare_parameter<double>("max_angular_velocity", 0.4));
+
     const int64_t n_cells = static_cast<int64_t>(width_) * static_cast<int64_t>(height_);
     grid_.assign(static_cast<size_t>(n_cells), -1);
     scores_.assign(static_cast<size_t>(n_cells), 0);
@@ -96,10 +102,16 @@ public:
       odom_topic_, odom_qos,
       [this](const nav_msgs::msg::Odometry::SharedPtr msg) {
         last_odom_ = msg;
+        odom_omega_ = msg->twist.twist.angular.z;
         broadcast_odom_tf(msg);
       });
 
-    map_pub_ = create_publisher<nav_msgs::msg::OccupancyGrid>(map_topic_, 1);
+    // TRANSIENT_LOCAL durability: standard for map topics.
+    // Matches reactive_nav's subscriber QoS — without this, the nav
+    // never receives the map and falls back to local scan-based planning.
+    auto map_qos = rclcpp::QoS(rclcpp::KeepLast(1));
+    map_qos.transient_local();
+    map_pub_ = create_publisher<nav_msgs::msg::OccupancyGrid>(map_topic_, map_qos);
     timer_ = create_wall_timer(
       std::chrono::duration<double>(1.0 / update_rate_),
       std::bind(&SimpleScanMapperCpp::update, this));
@@ -107,10 +119,11 @@ public:
     RCLCPP_INFO(
       get_logger(),
       "Simple scan mapper (C++, TF-based) started | scan=%s odom=%s map=%s size=%dx%d res=%.2f "
-      "lidar_offset=(%.3f,%.3f) score=[%d,%d] hit=%d miss=%d tf_timeout=%dms",
+      "lidar_offset=(%.3f,%.3f) score=[%d,%d] hit=%d miss=%d tf_timeout=%dms "
+      "pose_filter_alpha=%.2f max_angular_velocity=%.2f",
       scan_topic_.c_str(), odom_topic_.c_str(), map_topic_.c_str(), width_, height_, resolution_,
       lidar_offset_x_, lidar_offset_y_, score_min_, score_max_, hit_increment_, miss_decrement_,
-      tf_timeout_ms_);
+      tf_timeout_ms_, pose_filter_alpha_, max_angular_velocity_);
   }
 
 private:
@@ -141,6 +154,10 @@ private:
     scores_[i] = score;
   }
 
+  // Raytrace from (x0,y0) to (x1,y1), marking cells as free.
+  // STOPS when hitting a cell already above occupied threshold — this
+  // prevents free rays from erasing confirmed walls when viewing from
+  // the other side (the closure/wall-erasure problem).
   void raytrace_free(int x0, int y0, int x1, int y1)
   {
     int dx = std::abs(x1 - x0);
@@ -153,7 +170,11 @@ private:
     if (dx > dy) {
       double err = static_cast<double>(dx) / 2.0;
       while (x != x1) {
-        apply_evidence(x, y, -miss_decrement_);
+        const size_t i = idx(x, y);
+        // Stop ray at confirmed walls — don't erase through them
+        if (scores_[i] >= occupied_score_threshold_) return;
+        observed_[i] = true;
+        scores_[i] = std::clamp(scores_[i] - miss_decrement_, score_min_, score_max_);
         err -= static_cast<double>(dy);
         if (err < 0.0) {
           y += sy;
@@ -166,7 +187,11 @@ private:
 
     double err = static_cast<double>(dy) / 2.0;
     while (y != y1) {
-      apply_evidence(x, y, -miss_decrement_);
+      const size_t i = idx(x, y);
+      // Stop ray at confirmed walls — don't erase through them
+      if (scores_[i] >= occupied_score_threshold_) return;
+      observed_[i] = true;
+      scores_[i] = std::clamp(scores_[i] - miss_decrement_, score_min_, score_max_);
       err -= static_cast<double>(dx);
       if (err < 0.0) {
         x += sx;
@@ -218,6 +243,14 @@ private:
     map_pub_->publish(msg);
   }
 
+  // Normalize angle to [-pi, pi]
+  static double normalize_angle(double a)
+  {
+    while (a > M_PI)  a -= 2.0 * M_PI;
+    while (a < -M_PI) a += 2.0 * M_PI;
+    return a;
+  }
+
   void update()
   {
     if (!last_scan_ || !last_odom_) {
@@ -236,8 +269,6 @@ private:
     const auto odom = last_odom_;
 
     // Gate: reject scan-odom pairs with too much timestamp difference.
-    // Without this, the mapper can pair a scan with stale odom, placing
-    // it at the wrong position (causes map flickering/starburst).
     {
       const double scan_t = rclcpp::Time(scan->header.stamp).seconds();
       const double odom_t = rclcpp::Time(odom->header.stamp).seconds();
@@ -253,16 +284,23 @@ private:
       }
     }
 
+    // Gate: skip scans during fast rotation.
+    // At range R, angular velocity omega with desync dt creates displacement
+    // R * omega * dt.  At R=5m, omega=0.5 rad/s, dt=40ms => 10cm = 1 cell.
+    if (max_angular_velocity_ > 0.0 && std::abs(odom_omega_) > max_angular_velocity_) {
+      RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 3000,
+        "Dropping scan: angular velocity %.2f rad/s exceeds %.2f rad/s threshold",
+        odom_omega_, max_angular_velocity_);
+      last_scan_.reset();
+      return;
+    }
+
     // Determine scan frame: use parameter override, else scan header
     const std::string lookup_frame = scan_frame_.empty()
       ? scan->header.frame_id
       : scan_frame_;
 
     // TF-based pose lookup: interpolates odom at the exact scan timestamp.
-    // We wait up to tf_timeout_ms for the transform to become available.
-    // If it fails (scan timestamp too far ahead of TF data), we DROP the scan
-    // rather than using a stale TF — placing scans at the wrong pose causes
-    // map flickering and doubled structures.
     geometry_msgs::msg::TransformStamped transform;
     try {
       transform = tf_buffer_->lookupTransform(
@@ -325,8 +363,13 @@ private:
       const double ey = sy + dist * std::sin(world_bearing);
       const auto end_cell = world_to_grid(ex, ey);
 
+      // For rays that HIT a wall, clear up to the hit point so old
+      // ghost wall cells get erased during turns.  For no-hit rays
+      // (max-range / infinity), cap at max_clear_distance to avoid
+      // erasing distant real walls with long free rays.
       const double clear_dist =
-        (max_clear_distance_ <= 0.0) ? dist : std::min(dist, max_clear_distance_);
+        has_hit ? dist
+                : ((max_clear_distance_ <= 0.0) ? dist : std::min(dist, max_clear_distance_));
       const double cex = sx + clear_dist * std::cos(world_bearing);
       const double cey = sy + clear_dist * std::sin(world_bearing);
       const auto clear_end_cell = world_to_grid(cex, cey);
@@ -401,6 +444,17 @@ private:
   int occupied_score_threshold_{3};
   int free_score_threshold_{-3};
 
+  // Motion compensation
+  double pose_filter_alpha_{0.7};
+  double max_angular_velocity_{0.4};
+  double odom_omega_{0.0};
+
+  // EMA pose filter state
+  bool has_filtered_pose_{false};
+  double filtered_rx_{0.0};
+  double filtered_ry_{0.0};
+  double filtered_yaw_{0.0};
+
   std::vector<int8_t> grid_;
   std::vector<int> scores_;
   std::vector<bool> observed_;
@@ -430,3 +484,4 @@ int main(int argc, char ** argv)
   rclcpp::shutdown();
   return 0;
 }
+

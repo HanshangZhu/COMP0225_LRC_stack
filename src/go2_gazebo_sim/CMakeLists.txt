@@ -35,9 +35,7 @@ install(PROGRAMS
 
 install(DIRECTORY
   scripts/assets
-  scripts/perception
   scripts/slam
-  scripts/control
   scripts/observability
   DESTINATION lib/${PROJECT_NAME}/scripts
 )

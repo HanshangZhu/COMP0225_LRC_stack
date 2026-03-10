@@ -45,7 +45,7 @@
 - Canonical Go2 launch is `go2_gazebo_sim/launch/dual_go2_modular.launch.py`.
 - Canonical Go2W launch is `go2_gazebo_sim/launch/dual_go2w_modular.launch.py`.
 - Canonical single-Go2W Gazebo launch is `go2_gazebo_sim/launch/single_go2w_gazebo_cfpa2.launch.py`.
-- Canonical single-Go2W real-robot launch is `go2_gazebo_sim/launch/single_go2w_real_cfpa2.launch.py`.
+- Canonical single-Go2W real-robot launch is `go2_real_bringup/launch/single_go2w_real_cfpa2.launch.py`.
 - Legacy launch names remain as wrappers:
   - `two_go2_t_world_autonomy.launch.py`
   - `two_go2_t_world_coordinated_autonomy.launch.py`

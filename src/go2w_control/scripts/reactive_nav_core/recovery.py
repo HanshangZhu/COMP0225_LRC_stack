@@ -62,8 +62,7 @@ class RecoveryManager:
             return 0.0
 
         if (
-            external_stop != 0
-            or blocked_sec > 0.0
+            blocked_sec > 0.0
             or dist_to_goal <= (self.cfg.goal_tolerance + 0.1)
             or cmd_lin < self.cfg.stall_cmd_min_linear
             or abs(heading_err) > self.cfg.stall_heading_threshold

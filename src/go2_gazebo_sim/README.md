@@ -78,7 +78,7 @@ ros2 launch go2_gazebo_sim go2_l_corridor_cmu_frontier_local.launch.py
 Single-Go2W real-robot CFPA2 stack (CMU SLAM backend + single-robot CFPA2 + reactive_nav + joystick fallback):
 
 ```bash
-ros2 launch go2_gazebo_sim single_go2w_real_cfpa2.launch.py
+ros2 launch go2_real_bringup single_go2w_real_cfpa2.launch.py
 ```
 
 Single-Go2W Gazebo CFPA2 stack (single robot, Go2W assets, simulated odom + point cloud):

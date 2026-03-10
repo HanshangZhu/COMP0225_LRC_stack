@@ -333,6 +333,17 @@ class ReactiveNavCoordinator:
         target_angle = math.atan2(target_dy, target_dx)
         heading_err = wrap_angle(target_angle - robot_state.yaw)
 
+        # ── Tight-turn give-way: pre-emptive reverse at T-junctions ──
+        tt_result = self._maybe_tight_turn_reverse(
+            now_sec, runtime_state, robot_state,
+            heading_err, scan_metrics.min_front,
+            scan_metrics.rear_clearance,
+            goal_state, dist_to_goal, blocked_sec, external_stop,
+            steering_source, events,
+        )
+        if tt_result is not None:
+            return tt_result
+
         lin, ang = self.controller.compute_cmd(
             heading_err,
             heading_err_goal,
@@ -444,3 +455,94 @@ class ReactiveNavCoordinator:
             events=events,
             diagnostics=diag,
         )
+
+    def _maybe_tight_turn_reverse(
+        self,
+        now_sec: float,
+        runtime_state,
+        robot_state,
+        heading_err: float,
+        min_front: float,
+        rear_clearance: float,
+        goal_state,
+        dist_to_goal: float,
+        blocked_sec: float,
+        external_stop: int,
+        steering_source: str,
+        events: list,
+    ):
+        """Pre-emptive reverse when a sharp turn is needed but front clearance is low.
+
+        Returns a TickResult if the robot should be reversing, or None to continue
+        normal navigation.
+        """
+        if not self.cfg.tight_turn_preempt_enabled:
+            return None
+
+        # Currently executing a tight-turn reverse
+        if runtime_state.tight_turn_reverse_until_sec is not None:
+            if now_sec < runtime_state.tight_turn_reverse_until_sec:
+                remaining = runtime_state.tight_turn_reverse_until_sec - now_sec
+                return TickResult(
+                    linear_x=-self.cfg.unstick_reverse_speed,
+                    angular_z=0.0,
+                    events=events,
+                    diagnostics={
+                        "mode": "tight_turn_reverse",
+                        "goal": [round(goal_state.x, 2), round(goal_state.y, 2)],
+                        "dist_goal": round(dist_to_goal, 2),
+                        "min_front": round(min_front, 2),
+                        "heading_err_deg": round(math.degrees(heading_err), 1),
+                        "reverse_remaining_sec": round(remaining, 2),
+                        "ext_stop": external_stop,
+                        "stall_sec": 0.0,
+                        "stall_active": False,
+                        "stall_event_count": runtime_state.stall_event_count,
+                    },
+                )
+            else:
+                # Reverse phase done — enter cooldown
+                runtime_state.tight_turn_reverse_until_sec = None
+                runtime_state.tight_turn_cooldown_until_sec = now_sec + 3.0
+                events.append(("info", "Tight-turn reverse complete, resuming navigation."))
+                return None
+
+        # In cooldown — skip detection
+        if (runtime_state.tight_turn_cooldown_until_sec is not None
+                and now_sec < runtime_state.tight_turn_cooldown_until_sec):
+            return None
+
+        # ── Detection ──
+        # Sharp turn needed AND front is tight AND rear has room
+        sharp_turn = abs(heading_err) > self.cfg.tight_turn_angle_threshold
+        front_tight = min_front < self.cfg.tight_turn_min_front_clearance
+        rear_ok = rear_clearance > self.cfg.unstick_min_rear_clearance
+
+        if sharp_turn and front_tight and rear_ok:
+            duration = self.cfg.unstick_reverse_sec
+            runtime_state.tight_turn_reverse_until_sec = now_sec + duration
+            events.append((
+                "info",
+                f"TIGHT-TURN give-way: heading_err={math.degrees(heading_err):.0f}° "
+                f"min_front={min_front:.2f}m → reversing {duration:.1f}s",
+            ))
+            return TickResult(
+                linear_x=-self.cfg.unstick_reverse_speed,
+                angular_z=0.0,
+                events=events,
+                diagnostics={
+                    "mode": "tight_turn_reverse",
+                    "goal": [round(goal_state.x, 2), round(goal_state.y, 2)],
+                    "dist_goal": round(dist_to_goal, 2),
+                    "min_front": round(min_front, 2),
+                    "heading_err_deg": round(math.degrees(heading_err), 1),
+                    "reverse_remaining_sec": round(duration, 2),
+                    "ext_stop": external_stop,
+                    "stall_sec": 0.0,
+                    "stall_active": False,
+                    "stall_event_count": runtime_state.stall_event_count,
+                },
+            )
+
+        return None
+

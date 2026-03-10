@@ -1,6 +1,6 @@
 # FAST-LIO2 configuration for Gazebo simulation (Go2W with 3D LiDAR)
 # Sensor: go2w_description_3d_lidar.xacro gpu_ray (1024x16, 10Hz)
-# IMU:    gazebo imu_sensor (100Hz, on imu frame)
+# IMU:    gazebo imu_sensor (200Hz, on imu frame, BMI088-class noise)
 # LiDAR mount: imu → livox_mid360 at T=[0.187, 0, 0.0803] Ry(13°)
 #
 # NOTE: Must use the /**:/ros__parameters: wrapper for ROS 2 param loading.
@@ -8,10 +8,10 @@
 /**:
     ros__parameters:
         feature_extract_enable: false
-        point_filter_num: 4
-        max_iteration: 3
-        filter_size_surf: 0.5
-        filter_size_map: 0.5
+        point_filter_num: 1                   # keep ALL points — indoor needs density
+        max_iteration: 4                      # more iterations for stable convergence
+        filter_size_surf: 0.15                # ~15cm voxel — fine enough for indoor walls
+        filter_size_map: 0.15                 # match surf filter for consistent resolution
         cube_side_length: 1000.0
         runtime_pos_log_enable: false
         map_file_path: ""
@@ -30,10 +30,10 @@
             blind: 0.4                        # reject self-observation of robot body
 
         mapping:
-            acc_cov: 0.5                      # loosened 5x for Gazebo IMU noise
-            gyr_cov: 0.5                      # loosened 5x for Gazebo IMU noise
-            b_acc_cov: 0.001                  # loosened 10x for sim bias drift
-            b_gyr_cov: 0.001                  # loosened 10x for sim bias drift
+            acc_cov: 0.1                      # tuned for BMI088-class Gazebo IMU noise
+            gyr_cov: 0.1                      # tuned for BMI088-class Gazebo IMU noise
+            b_acc_cov: 0.0001                 # tighter bias drift — sim IMU has low bias
+            b_gyr_cov: 0.0001                 # tighter bias drift — sim IMU has low bias
             fov_degree: 360.0                 # full 360 horizontal scan
             det_range: 20.0                   # match URDF max range
             extrinsic_est_en: false           # fixed extrinsics (known from URDF)
@@ -50,7 +50,7 @@
             path_en: true
             scan_publish_en: true
             dense_publish_en: true
-            scan_bodyframe_pub_en: false
+            scan_bodyframe_pub_en: true
 
         pcd_save:
             pcd_save_en: false

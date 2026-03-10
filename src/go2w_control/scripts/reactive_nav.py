@@ -47,15 +47,32 @@ class ReactiveNav(Node):
         self.teammate_y: float | None = None
         self.teammate_speed: float = 0.0
         self.last_teammate_odom_rx_sec: float | None = None
+        self.trajectory_history: list[tuple[float, float]] = []
+        self.trajectory_max_points = 2000
+        self._traj_overlap_check_interval = 30   # check every N new points
+        self._traj_overlap_counter = 0
+        self._traj_overlap_window = 20            # recent points to check
+        self._traj_overlap_radius = 0.5           # meters
+        self._traj_overlap_threshold = 0.6        # 60% overlap = backtrack
+        self._traj_consec_overlaps = 0
+        # Exploration evaluation state
+        self._backtrack_count = 0
+        self._wall_hit_count = 0
+        self._wall_hit_threshold = 0.15           # min_front below this = wall hit
+        self._min_travel_for_pass = 3.0           # must travel at least 3m
+        self._eval_done = False
+        self._eval_idle_sec = 20.0                # seconds idle at goal_reached to trigger eval
 
         # Global map for A* grid planning (runs in background thread)
         self.last_map: OccupancyGrid | None = None
         self.last_map_stamp_sec: float = 0.0
         self.grid_planner = AsyncGridPlanner(
-            inflation_m=0.25,
+            inflation_m=0.38,
             waypoint_spacing_m=0.4,
             replan_interval_sec=2.0,
             goal_shift_threshold_m=0.3,
+            decay_m=0.0,       # disabled — causes jittery replanning that breaks Fast-LIO EKF
+            cost_weight=0.0,
         )
 
         self.declare_parameter("debug_stall_warn_sec", 6.0)
@@ -122,6 +139,7 @@ class ReactiveNav(Node):
         self.status_pub = self.create_publisher(String, "/nav_status", 10)
         self.final_goal_marker_pub = self.create_publisher(Marker, "/final_goal_marker", 10)
         self.planned_path_pub = self.create_publisher(Path, "/planned_path", 10)
+        self.trajectory_path_pub = self.create_publisher(Path, "/robot_trajectory", 10)
         self.robot_pose_marker_pub = self.create_publisher(Marker, "/robot_pose_marker", 10)
 
         self.timer = self.create_timer(1.0 / self.cfg.control_rate, self.control_loop)
@@ -132,25 +150,38 @@ class ReactiveNav(Node):
         self.last_map_stamp_sec = self.get_clock().now().nanoseconds / 1e9
 
     def goal_cb(self, msg: PointStamped) -> None:
+        goal_xy = (float(msg.point.x), float(msg.point.y))
+        self.goal_msg_seq += 1
+        self.last_goal_rx_sec = self.get_clock().now().nanoseconds / 1e9
+
+        # Deduplicate: skip clearing plans if goal hasn't moved significantly.
+        # CFPA2 re-publishes the same frontier every ~1.33s; without this check,
+        # every republish wipes plan_waypoints_world for ~50-100ms while A*
+        # restarts, causing the robot to lose its path mid-traverse.
+        goal_moved = True
+        if self.last_goal_xy is not None:
+            delta = math.hypot(goal_xy[0] - self.last_goal_xy[0], goal_xy[1] - self.last_goal_xy[1])
+            goal_moved = delta >= 0.3  # match grid_planner goal_shift_threshold_m
+
         self.goal_state.x = msg.point.x
         self.goal_state.y = msg.point.y
         self.goal_frame_id = msg.header.frame_id or "world"
-        self.goal_msg_seq += 1
-        self.last_goal_rx_sec = self.get_clock().now().nanoseconds / 1e9
-        self.runtime_state.plan_waypoints_world = []
-        self.runtime_state.plan_last_time_sec = None
-        self.runtime_state.plan_last_goal = None
-        self.grid_planner.force_replan()  # force grid re-plan on new goal
-        goal_xy = (float(self.goal_state.x), float(self.goal_state.y))
-        if self.last_goal_xy is None:
-            self.get_logger().info(f"New goal[#{self.goal_msg_seq}]: ({goal_xy[0]:.2f}, {goal_xy[1]:.2f})")
-        else:
-            delta = math.hypot(goal_xy[0] - self.last_goal_xy[0], goal_xy[1] - self.last_goal_xy[1])
-            if delta >= 0.05:
+
+        if goal_moved:
+            # Genuinely new goal: clear old plan and force full replan
+            self.runtime_state.plan_waypoints_world = []
+            self.runtime_state.plan_last_time_sec = None
+            self.runtime_state.plan_last_goal = None
+            self.grid_planner.force_replan()
+            if self.last_goal_xy is None:
+                self.get_logger().info(f"New goal[#{self.goal_msg_seq}]: ({goal_xy[0]:.2f}, {goal_xy[1]:.2f})")
+            else:
                 self.get_logger().info(
                     f"Goal update[#{self.goal_msg_seq}]: ({goal_xy[0]:.2f}, {goal_xy[1]:.2f}) "
                     f"delta={delta:.2f}m"
                 )
+        # else: same goal re-published — D* Lite handles map changes incrementally
+
         self.last_goal_xy = goal_xy
 
     def odom_cb(self, msg: Odometry) -> None:
@@ -165,6 +196,64 @@ class ReactiveNav(Node):
         vx = msg.twist.twist.linear.x
         vy = msg.twist.twist.linear.y
         self.robot_state.speed = math.hypot(vx, vy)
+
+        # Accumulate trajectory history
+        x, y = float(self.robot_state.x), float(self.robot_state.y)
+        if (not self.trajectory_history
+                or math.hypot(x - self.trajectory_history[-1][0],
+                              y - self.trajectory_history[-1][1]) > 0.05):
+            self.trajectory_history.append((x, y))
+            self._traj_overlap_counter += 1
+            if len(self.trajectory_history) > self.trajectory_max_points:
+                self.trajectory_history = self.trajectory_history[-self.trajectory_max_points:]
+            if self._traj_overlap_counter >= self._traj_overlap_check_interval:
+                self._traj_overlap_counter = 0
+                self._check_trajectory_overlap()
+    def _check_trajectory_overlap(self) -> None:
+        """Detect oscillation: recent trajectory revisiting recent-past trajectory.
+
+        Only flags A→B→A patterns by comparing the last `window` points against
+        a "recent past" window (60–200 points ago).  This avoids false positives
+        when the robot necessarily traverses an explored corridor once to reach
+        a new branch.  Requires consecutive overlap triggers to count.
+        """
+        n = len(self.trajectory_history)
+        window = self._traj_overlap_window
+        gap = 60            # skip the most recent 60 pts (transit allowance)
+        past_len = 140      # compare against pts [n-gap-past_len : n-gap]
+        if n < gap + past_len + window:
+            return
+
+        recent = self.trajectory_history[-window:]
+        past_start = n - gap - past_len
+        past_end = n - gap
+        past = self.trajectory_history[past_start:past_end]
+        r_sq = self._traj_overlap_radius ** 2
+
+        overlap_count = 0
+        for rx, ry in recent:
+            for ox, oy in past:
+                if (rx - ox) ** 2 + (ry - oy) ** 2 < r_sq:
+                    overlap_count += 1
+                    break
+
+        ratio = overlap_count / window
+        if ratio >= self._traj_overlap_threshold:
+            self._traj_consec_overlaps += 1
+            if self._traj_consec_overlaps >= 5:  # need 5 consecutive triggers
+                seg_dist = 0.0
+                for i in range(1, len(recent)):
+                    seg_dist += math.hypot(recent[i][0] - recent[i-1][0],
+                                           recent[i][1] - recent[i-1][1])
+                self.get_logger().warn(
+                    f"BACKTRACK detected: {ratio:.0%} of last {window} pts overlap "
+                    f"with recent-past trail | segment=({recent[0][0]:.1f},{recent[0][1]:.1f})"
+                    f"→({recent[-1][0]:.1f},{recent[-1][1]:.1f}) "
+                    f"wasted={seg_dist:.1f}m total_disp={self.path_total_m:.1f}m"
+                )
+                self._backtrack_count += 1
+        else:
+            self._traj_consec_overlaps = 0
 
     def scan_cb(self, msg: LaserScan) -> None:
         self.last_scan = msg
@@ -242,6 +331,20 @@ class ReactiveNav(Node):
         cmd_lin = float(result.linear_x)
         cmd_ang = float(result.angular_z)
         cmd_lin, cmd_ang, teammate_diag = self._apply_teammate_avoidance(now_sec, cmd_lin, cmd_ang)
+
+        # Acceleration limiter — prevent SLAM-breaking jerk at startup.
+        dt = 1.0 / max(1.0, self.cfg.control_rate)
+        max_lin_accel = 0.8   # m/s² per tick
+        max_ang_accel = 1.5   # rad/s² per tick
+        prev_lin = getattr(self, '_prev_cmd_lin', 0.0)
+        prev_ang = getattr(self, '_prev_cmd_ang', 0.0)
+        max_lin_delta = max_lin_accel * dt
+        max_ang_delta = max_ang_accel * dt
+        cmd_lin = max(prev_lin - max_lin_delta, min(prev_lin + max_lin_delta, cmd_lin))
+        cmd_ang = max(prev_ang - max_ang_delta, min(prev_ang + max_ang_delta, cmd_ang))
+        self._prev_cmd_lin = cmd_lin
+        self._prev_cmd_ang = cmd_ang
+
         msg.twist.linear.x = cmd_lin
         msg.twist.angular.z = cmd_ang
         self.cmd_pub.publish(msg)
@@ -272,6 +375,15 @@ class ReactiveNav(Node):
         status_msg = String()
         status_msg.data = json.dumps(diag, separators=(",", ":"))
         self.status_pub.publish(status_msg)
+
+        # Track wall hits: min_front below threshold while actively navigating
+        min_front = diag.get("min_front")
+        mode = diag.get("mode", "")
+        if (min_front is not None and isinstance(min_front, (int, float))
+                and min_front < self._wall_hit_threshold
+                and mode == "navigate" and abs(float(result.linear_x)) > 0.05):
+            self._wall_hit_count += 1
+
         self._maybe_log_stall_warning(now_sec, diag, cmd_lin, cmd_ang)
         self._maybe_log_local_summary(now_sec, diag, cmd_lin, cmd_ang)
 
@@ -380,6 +492,46 @@ class ReactiveNav(Node):
             f"blocked_sec={diag.get('blocked_sec', '-')} zero_reason={diag.get('zero_reason', '-')}"
         )
 
+        # Run exploration PASS/FAIL evaluation when idle long enough at goal_reached
+        if mode == "goal_reached" and stalled_for >= self._eval_idle_sec and not self._eval_done:
+            self._run_exploration_eval()
+
+    def _run_exploration_eval(self) -> None:
+        """Evaluate exploration run: PASS if covered distance, no backtracks, no wall hits."""
+        self._eval_done = True
+        reasons = []
+
+        traveled = self.path_total_m >= self._min_travel_for_pass
+        if not traveled:
+            reasons.append(f"distance={self.path_total_m:.1f}m < {self._min_travel_for_pass:.1f}m (still at spawn?)")
+
+        no_backtrack = self._backtrack_count == 0
+        if not no_backtrack:
+            reasons.append(f"backtrack_events={self._backtrack_count}")
+
+        no_wall_hits = self._wall_hit_count == 0
+        if not no_wall_hits:
+            reasons.append(f"wall_hit_events={self._wall_hit_count}")
+
+        passed = traveled and no_backtrack and no_wall_hits
+
+        if passed:
+            self.get_logger().info(
+                f"\n{'='*60}\n"
+                f"  EXPLORATION EVAL: PASS\n"
+                f"  distance={self.path_total_m:.1f}m  backtracks=0  wall_hits=0\n"
+                f"{'='*60}"
+            )
+        else:
+            self.get_logger().warn(
+                f"\n{'='*60}\n"
+                f"  EXPLORATION EVAL: FAIL\n"
+                f"  distance={self.path_total_m:.1f}m  backtracks={self._backtrack_count}  "
+                f"wall_hits={self._wall_hit_count}\n"
+                f"  reasons: {'; '.join(reasons)}\n"
+                f"{'='*60}"
+            )
+
     def _maybe_log_local_summary(self, now_sec: float, diag: dict, lin: float, ang: float) -> None:
         if self.last_summary_sec is None:
             self.last_summary_sec = now_sec
@@ -404,6 +556,7 @@ class ReactiveNav(Node):
         frame_id = self.goal_frame_id or "world"
         self._publish_final_goal_marker(stamp_msg, frame_id)
         self._publish_planned_path(stamp_msg, frame_id)
+        self._publish_trajectory(stamp_msg, frame_id)
         self._publish_robot_pose_marker(stamp_msg, frame_id)
 
     def _publish_final_goal_marker(self, stamp_msg, frame_id: str) -> None:
@@ -473,6 +626,20 @@ class ReactiveNav(Node):
 
         self.planned_path_pub.publish(path)
 
+    def _publish_trajectory(self, stamp_msg, frame_id: str) -> None:
+        path = Path()
+        path.header.stamp = stamp_msg
+        path.header.frame_id = frame_id
+        for wx, wy in self.trajectory_history:
+            pose = PoseStamped()
+            pose.header = path.header
+            pose.pose.position.x = wx
+            pose.pose.position.y = wy
+            pose.pose.position.z = 0.02
+            pose.pose.orientation.w = 1.0
+            path.poses.append(pose)
+        self.trajectory_path_pub.publish(path)
+
     def _publish_robot_pose_marker(self, stamp_msg, frame_id: str) -> None:
         marker = Marker()
         marker.header.stamp = stamp_msg
@@ -491,26 +658,28 @@ class ReactiveNav(Node):
         marker.color.b = 1.0
         marker.color.a = 0.85
 
-        # Build triangle pointing in yaw direction
+        # Build triangle pointing in yaw direction — sized to match Go2W footprint
+        # Go2W is ~0.70m long × 0.35m wide (including legs)
         yaw = self.robot_state.yaw
         cx, cy = float(self.robot_state.x), float(self.robot_state.y)
-        size = 0.25  # triangle size in meters
+        half_length = 0.35   # nose-to-center (half of 0.70m body length)
+        half_width = 0.175   # center-to-side (half of 0.35m body width)
 
         from geometry_msgs.msg import Point
         # Front tip
         p0 = Point()
-        p0.x = cx + size * math.cos(yaw)
-        p0.y = cy + size * math.sin(yaw)
+        p0.x = cx + half_length * math.cos(yaw)
+        p0.y = cy + half_length * math.sin(yaw)
         p0.z = 0.05
         # Rear left
         p1 = Point()
-        p1.x = cx + size * 0.5 * math.cos(yaw + 2.5)
-        p1.y = cy + size * 0.5 * math.sin(yaw + 2.5)
+        p1.x = cx - half_length * math.cos(yaw) + half_width * math.cos(yaw + math.pi / 2)
+        p1.y = cy - half_length * math.sin(yaw) + half_width * math.sin(yaw + math.pi / 2)
         p1.z = 0.05
         # Rear right
         p2 = Point()
-        p2.x = cx + size * 0.5 * math.cos(yaw - 2.5)
-        p2.y = cy + size * 0.5 * math.sin(yaw - 2.5)
+        p2.x = cx - half_length * math.cos(yaw) - half_width * math.cos(yaw + math.pi / 2)
+        p2.y = cy - half_length * math.sin(yaw) - half_width * math.sin(yaw + math.pi / 2)
         p2.z = 0.05
 
         marker.points = [p0, p1, p2]

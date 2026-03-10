@@ -1,9 +1,0 @@
-/home/hz/COMP0225_LRC_stack/COMP0225_QRC_DEMO/build/comp0225_qrc_demo_bringup/CMakeFiles/uninstall.dir
-/home/hz/COMP0225_LRC_stack/COMP0225_QRC_DEMO/build/comp0225_qrc_demo_bringup/CMakeFiles/comp0225_qrc_demo_bringup_uninstall.dir
-/home/hz/COMP0225_LRC_stack/COMP0225_QRC_DEMO/build/comp0225_qrc_demo_bringup/CMakeFiles/test.dir
-/home/hz/COMP0225_LRC_stack/COMP0225_QRC_DEMO/build/comp0225_qrc_demo_bringup/CMakeFiles/edit_cache.dir
-/home/hz/COMP0225_LRC_stack/COMP0225_QRC_DEMO/build/comp0225_qrc_demo_bringup/CMakeFiles/rebuild_cache.dir
-/home/hz/COMP0225_LRC_stack/COMP0225_QRC_DEMO/build/comp0225_qrc_demo_bringup/CMakeFiles/list_install_components.dir
-/home/hz/COMP0225_LRC_stack/COMP0225_QRC_DEMO/build/comp0225_qrc_demo_bringup/CMakeFiles/install.dir
-/home/hz/COMP0225_LRC_stack/COMP0225_QRC_DEMO/build/comp0225_qrc_demo_bringup/CMakeFiles/install/local.dir
-/home/hz/COMP0225_LRC_stack/COMP0225_QRC_DEMO/build/comp0225_qrc_demo_bringup/CMakeFiles/install/strip.dir

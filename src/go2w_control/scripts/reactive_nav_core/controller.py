@@ -63,7 +63,9 @@ class MotionController:
         ang = max(-self.cfg.max_angular_speed, min(ang, self.cfg.max_angular_speed))
 
         if hard_stop:
-            # External stop always wins.
-            return (0.0, 0.0)
+            # External stop kills forward motion but allows turn-in-place
+            # so the robot can rotate away from the wall, matching
+            # blocked_front behavior above.
+            return (0.0, float(ang))
 
         return (float(lin), float(ang))

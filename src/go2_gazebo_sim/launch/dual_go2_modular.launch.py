@@ -60,6 +60,7 @@ def _normalize_planner_backend(value: str) -> str:
         "ros1_mtare",
         "far_ros2",
         "tare_ros2_exact",
+        "gbplanner2",
     }
     if backend not in supported:
         raise ValueError(
@@ -256,12 +257,12 @@ def _build_far_planner_node(
         ("/decoded_vgraph", f"/{ns}/decoded_vgraph"),
     ]
     return Node(
-        package="go2_far_planner",
+        package="far_planner",
         executable="far_planner",
         namespace=ns,
         name="far_planner",
         parameters=[
-            os.path.join(get_package_share_directory("go2_far_planner"), "config", "default.yaml"),
+            os.path.join(get_package_share_directory("far_planner"), "config", "default.yaml"),
             {"use_sim_time": use_sim_time},
             {"world_frame": world_frame},
             {"graph_msger/robot_id": robot_id},
@@ -552,6 +553,7 @@ def _robot_autonomy_actions(
                     ("/cmd_vel_stamped", f"/{ns}/cmd_vel_stamped"),
                     ("/nav_status", f"/{ns}/nav_status"),
                     ("/planned_path", f"/{ns}/planned_path"),
+                    ("/robot_trajectory", f"/{ns}/robot_trajectory"),
                     ("/final_goal_marker", f"/{ns}/final_goal_marker"),
                 ],
             )
@@ -648,7 +650,7 @@ def _build_dual_profile_actions(context, *, launch_name: str, robot_config: dict
     missing_exact_packages: list[str] = []
     missing_shared_graph_packages: list[str] = []
     if use_tare_ros2_exact:
-        for pkg_name in ("go2_far_planner", "go2_tare_planner_ros2"):
+        for pkg_name in ("far_planner", "go2_tare_planner_ros2"):
             try:
                 get_package_share_directory(pkg_name)
             except PackageNotFoundError:
@@ -1315,6 +1317,38 @@ def _build_dual_profile_actions(context, *, launch_name: str, robot_config: dict
                     )
                 )
             )
+        elif planner_backend == "gbplanner2":
+            gbp_config = os.path.join(
+                get_package_share_directory("go2_nav_algorithms"),
+                "config", "gbplanner2_dual.yaml",
+            )
+            for ns in ("robot_a", "robot_b"):
+                actions.append(
+                    TimerAction(
+                        period=20.0,
+                        actions=[
+                            Node(
+                                package="go2_nav_algorithms",
+                                executable="gbplanner2_local.py",
+                                name="gbplanner2_local",
+                                namespace=ns,
+                                parameters=[
+                                    gbp_config,
+                                    {"use_sim_time": use_sim_time},
+                                    {"goal_topic": f"/{ns}/way_point_coord"},
+                                    {"map_topic": f"/{ns}/map"},
+                                    {"odom_topic": f"/{ns}/odom/nav"},
+                                ],
+                                remappings=[
+                                    ("way_point_coord", f"/{ns}/way_point_coord"),
+                                    ("map", f"/{ns}/map"),
+                                    ("odom/nav", f"/{ns}/odom/nav"),
+                                ],
+                                output="screen",
+                            ),
+                        ],
+                    )
+                )
         elif planner_backend in {"ros1_mtare", "far_ros2"}:
             actions.append(
                 LogInfo(

@@ -759,11 +759,25 @@
     <axis xyz="0 0 0" />
   </joint>
 
-  <!-- Gazebo IMU stream for SLAM pipelines expecting /imu/data. -->
+  <!-- Gazebo IMU stream for SLAM pipelines expecting /imu/data.
+       Noise values are BMI088-class (Unitree Go2 actual IMU):
+       gyro noise density ~0.0017 rad/s, accel noise density ~0.017 m/s². -->
   <gazebo reference="imu">
     <sensor name="imu_sensor" type="imu">
       <always_on>true</always_on>
-      <update_rate>100.0</update_rate>
+      <update_rate>200.0</update_rate>
+      <imu>
+        <angular_velocity>
+          <x><noise type="gaussian"><mean>0.0</mean><stddev>0.0017</stddev></noise></x>
+          <y><noise type="gaussian"><mean>0.0</mean><stddev>0.0017</stddev></noise></y>
+          <z><noise type="gaussian"><mean>0.0</mean><stddev>0.0017</stddev></noise></z>
+        </angular_velocity>
+        <linear_acceleration>
+          <x><noise type="gaussian"><mean>0.0</mean><stddev>0.017</stddev></noise></x>
+          <y><noise type="gaussian"><mean>0.0</mean><stddev>0.017</stddev></noise></y>
+          <z><noise type="gaussian"><mean>0.0</mean><stddev>0.017</stddev></noise></z>
+        </linear_acceleration>
+      </imu>
       <plugin name="gazebo_ros_imu" filename="libgazebo_ros_imu_sensor.so">
         <ros>
           <remapping>~/out:=/imu/data</remapping>

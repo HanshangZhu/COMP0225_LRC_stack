@@ -54,6 +54,9 @@ class NavRuntimeState:
     unstick_until_sec: Optional[float] = None
     unstick_turn_sign: float = 1.0
 
+    tight_turn_reverse_until_sec: Optional[float] = None
+    tight_turn_cooldown_until_sec: Optional[float] = None
+
     external_stop: int = 0
 
 

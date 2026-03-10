@@ -1,15 +1,28 @@
 /**:
   ros__parameters:
-    # Occupancy grid tuned for single-paint-per-scan (each scan is applied
-    # exactly once).  Walls require 3 hits to appear (filters transient noise
-    # and grazing-angle edge returns), but persist well once confirmed.
+    # === Occupancy grid with log-odds evidence model ===
+    #
+    # Log-odds probability model:
+    #   P(occupied|hit)  ≈ 0.7  →  log-odds = +3
+    #   P(occupied|miss) ≈ 0.4  →  log-odds = -1
+    #
+    # Asymmetric ratio 3:1 means walls form in ~3 hits (score=9)
+    # but require ~9 consecutive miss observations to erase.
+    # Combined with stop-at-occupied raytrace, walls are very stable.
+    #
+    # Score range [-10, 20] with clamping prevents runaway accumulation.
+    # Thresholds: occupied at 6 (2 hits), free at -3 (3 misses).
+
     max_range: 8.0
-    max_clear_distance: 8.0
+    max_clear_distance: 3.0        # limit no-hit ray clearing
     update_rate: 2.0
     max_scan_odom_dt: 0.10
-    hit_increment: 5
+
+    # Log-odds scoring (asymmetric: hits 3x stronger than misses)
+    hit_increment: 3
     miss_decrement: 2
-    occupied_score_threshold: 12
-    free_score_threshold: -2
-    score_min: -12
-    score_max: 20
+    occupied_score_threshold: 6    # 2 hits to confirm wall
+    free_score_threshold: -3       # 3 misses to confirm free
+    score_min: -10                 # clamp floor (prevents deep free)
+    score_max: 20                  # clamp ceiling (prevents sticky walls)
+

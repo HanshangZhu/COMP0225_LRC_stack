@@ -13,6 +13,7 @@ setup(
         ("share/" + package_name + "/config", ["config/cfpa2_single_robot.yaml"]),
     ],
     install_requires=["setuptools"],
+    package_data={package_name: ["*.so"]},
     zip_safe=True,
     maintainer="hz",
     maintainer_email="hz@example.com",

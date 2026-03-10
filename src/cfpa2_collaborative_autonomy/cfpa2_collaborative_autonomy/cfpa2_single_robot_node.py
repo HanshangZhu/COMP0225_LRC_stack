@@ -123,6 +123,17 @@ class CFPA2SingleRobotNode(CFPA2Coordinator):
         if utilities:
             candidate_goal, assignment_score = max(utilities.items(), key=lambda kv: kv[1])
 
+        # Stop pattern: if even the best frontier is below the min utility
+        # threshold, don't assign any goal — robot holds position.
+        if candidate_goal is not None and assignment_score < self.cfpa2_min_utility:
+            top3 = sorted(utilities.items(), key=lambda kv: kv[1], reverse=True)[:3]
+            top_txt = " ".join(f"({g[0]:.1f},{g[1]:.1f})={s:.2f}" for g, s in top3)
+            self.get_logger().info(
+                f"HOLD [{ns}] best_u={assignment_score:.2f} < min={self.cfpa2_min_utility:.2f} "
+                f"| top: {top_txt}"
+            )
+            candidate_goal = None
+
         forced_goal = self._maybe_force_cfpa2_stuck_recovery(
             ns=ns,
             now_ns=now_ns,
@@ -176,7 +187,14 @@ class CFPA2SingleRobotNode(CFPA2Coordinator):
             if forced_switch:
                 goal = candidate_goal
             else:
-                goal = self._apply_switch_hysteresis(ns, candidate_goal, assignment_score)
+                goal = self._apply_goal_policy(
+                    ns=ns,
+                    candidate_goal=candidate_goal,
+                    assignment_score=assignment_score,
+                    map_msg=planning_map,
+                    dist_map=dist_map,
+                    now_ns=now_ns,
+                )
 
         if goal is None:
             self._log_no_goal_debug(
@@ -208,6 +226,7 @@ class CFPA2SingleRobotNode(CFPA2Coordinator):
             per_ns_frontiers={ns: len(targets)},
             per_ns_reachable={ns: reachable},
             per_ns_assigned={ns: goal},
+            per_ns_utilities={ns: utilities},
         )
 
 

@@ -48,6 +48,7 @@ class ReactiveNavConfig:
     planner_goal_replan_delta: float = 0.2
     planner_goal_search_radius: float = 1.2
     planner_start_clearance_radius: float = 0.20
+    planner_safety_clearance: float = 0.45
     planner_escape_enabled: bool = True
     planner_escape_min_range: float = 0.45
     planner_escape_min_step: float = 0.25
@@ -77,11 +78,16 @@ class ReactiveNavConfig:
     path_smoothing_passes: int = 0
     # Minimum fraction of max_linear_speed maintained during turns (0.0 = full cos slowdown).
     min_speed_ratio: float = 0.0
+    # Pre-emptive reverse at T-junctions when sharp turn + low front clearance.
+    tight_turn_preempt_enabled: bool = False
+    tight_turn_angle_threshold_deg: float = 70.0
+    tight_turn_min_front_clearance: float = 0.60
 
     front_half: float = field(init=False)
     side_half: float = field(init=False)
     wall_scan_total_angle: float = field(init=False)
     stall_heading_threshold: float = field(init=False)
+    tight_turn_angle_threshold: float = field(init=False)
     planner_cells: int = field(init=False)
 
     def __post_init__(self) -> None:
@@ -93,6 +99,7 @@ class ReactiveNavConfig:
         self.side_half = math.radians(float(self.side_check_angle_deg))
         self.wall_scan_total_angle = math.radians(float(self.wall_scan_total_angle_deg))
         self.stall_heading_threshold = math.radians(max(0.0, float(self.stall_heading_threshold_deg)))
+        self.tight_turn_angle_threshold = math.radians(max(0.0, float(self.tight_turn_angle_threshold_deg)))
 
         planner_cells = int(math.ceil((2.0 * self.planner_grid_radius) / self.planner_resolution)) + 1
         self.planner_cells = max(31, planner_cells | 1)
@@ -143,6 +150,7 @@ class ReactiveNavConfig:
             "planner_goal_replan_delta": defaults.planner_goal_replan_delta,
             "planner_goal_search_radius": defaults.planner_goal_search_radius,
             "planner_start_clearance_radius": defaults.planner_start_clearance_radius,
+            "planner_safety_clearance": defaults.planner_safety_clearance,
             "planner_escape_enabled": defaults.planner_escape_enabled,
             "planner_escape_min_range": defaults.planner_escape_min_range,
             "planner_escape_min_step": defaults.planner_escape_min_step,
@@ -170,6 +178,9 @@ class ReactiveNavConfig:
             "escape_waypoint_reach_tol": defaults.escape_waypoint_reach_tol,
             "path_smoothing_passes": defaults.path_smoothing_passes,
             "min_speed_ratio": defaults.min_speed_ratio,
+            "tight_turn_preempt_enabled": defaults.tight_turn_preempt_enabled,
+            "tight_turn_angle_threshold_deg": defaults.tight_turn_angle_threshold_deg,
+            "tight_turn_min_front_clearance": defaults.tight_turn_min_front_clearance,
         }
 
         for key, value in param_defaults.items():
@@ -215,6 +226,7 @@ class ReactiveNavConfig:
             "planner_goal_replan_delta",
             "planner_goal_search_radius",
             "planner_start_clearance_radius",
+            "planner_safety_clearance",
             "planner_escape_min_range",
             "planner_escape_min_step",
             "planner_escape_max_step",
@@ -238,6 +250,8 @@ class ReactiveNavConfig:
             "escape_waypoint_hold_sec",
             "escape_waypoint_reach_tol",
             "min_speed_ratio",
+            "tight_turn_angle_threshold_deg",
+            "tight_turn_min_front_clearance",
         }
         bool_fields = {
             "require_settle_before_motion",
@@ -248,6 +262,7 @@ class ReactiveNavConfig:
             "planner_escape_enabled",
             "stall_recovery_enabled",
             "unstick_reverse_enabled",
+            "tight_turn_preempt_enabled",
         }
 
         for field in float_fields:

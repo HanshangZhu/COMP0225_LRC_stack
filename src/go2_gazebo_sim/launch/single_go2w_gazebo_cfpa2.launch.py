@@ -99,6 +99,10 @@ def _launch_setup(context):
     spawn_x = _get(context, "spawn_x")
     spawn_y = _get(context, "spawn_y")
     spawn_yaw = _get(context, "spawn_yaw")
+    cfpa2_w_ig = float(_get(context, "cfpa2_w_ig"))
+    cfpa2_w_c = float(_get(context, "cfpa2_w_c"))
+    cfpa2_w_momentum = float(_get(context, "cfpa2_w_momentum"))
+    cfpa2_min_utility = float(_get(context, "cfpa2_min_utility"))
 
     go2_gazebo_pkg = get_package_share_directory("go2_gazebo_sim")
     champ_base_pkg = get_package_share_directory("champ_base")
@@ -312,6 +316,7 @@ def _launch_setup(context):
                     ("/velodyne_points", f"/{robot_ns}/velodyne_points"),
                     ("/imu/data", f"/{robot_ns}/imu/data"),
                     ("/Odometry", f"/{robot_ns}/Odometry"),
+                    ("/cloud_registered_body", f"/{robot_ns}/cloud_registered_body"),
                 ],
                 output="screen",
             )
@@ -347,6 +352,33 @@ def _launch_setup(context):
             )
 
     if enable_perception:
+        # When Fast-LIO is active, use its motion-undistorted cloud.
+        # Static TF imu→body (identity) on namespaced /robot/tf_static
+        # connects Fast-LIO's 'body' frame to URDF chain:
+        #   body → imu → base → base_link
+        # No conflict with Fast-LIO's camera_init→body on global /tf
+        # since pointcloud_to_laserscan only listens on /robot/tf.
+        if use_fast_lio:
+            scan_cloud_topic = f"/{robot_ns}/cloud_registered_body"
+            robot_actions.append(
+                Node(
+                    package="tf2_ros",
+                    executable="static_transform_publisher",
+                    namespace=robot_ns,
+                    name="imu_to_body_tf",
+                    arguments=["--frame-id", "imu", "--child-frame-id", "body",
+                               "--x", "0", "--y", "0", "--z", "0",
+                               "--qx", "0", "--qy", "0", "--qz", "0", "--qw", "1"],
+                    remappings=[
+                        ("/tf_static", f"/{robot_ns}/tf_static"),
+                    ],
+                    parameters=[{"use_sim_time": use_sim_time}],
+                    output="log",
+                )
+            )
+        else:
+            scan_cloud_topic = perception_cloud_topic
+
         robot_actions.append(
             build_pointcloud_to_laserscan_node(
                 ns=robot_ns,
@@ -363,7 +395,7 @@ def _launch_setup(context):
                 remappings=[
                     ("/tf", f"/{robot_ns}/tf"),
                     ("/tf_static", f"/{robot_ns}/tf_static"),
-                    ("cloud_in", perception_cloud_topic),
+                    ("cloud_in", scan_cloud_topic),
                     ("scan", planning_scan_topic),
                 ],
             )
@@ -413,6 +445,10 @@ def _launch_setup(context):
                             "namespaces": [robot_ns],
                             "goal_topic_suffix": "/way_point_coord",
                             "marker_frame_override": "world",
+                            "cfpa2_w_ig": cfpa2_w_ig,
+                            "cfpa2_w_c": cfpa2_w_c,
+                            "cfpa2_w_momentum": cfpa2_w_momentum,
+                            "cfpa2_min_utility": cfpa2_min_utility,
                         },
                     ],
                     output="screen",
@@ -452,6 +488,7 @@ def _launch_setup(context):
                         ("/cmd_vel_stamped", f"/{robot_ns}/cmd_vel_stamped"),
                         ("/nav_status", f"/{robot_ns}/nav_status"),
                         ("/planned_path", f"/{robot_ns}/planned_path"),
+                        ("/robot_trajectory", f"/{robot_ns}/robot_trajectory"),
                         ("/final_goal_marker", f"/{robot_ns}/final_goal_marker"),
                         ("/robot_pose_marker", f"/{robot_ns}/robot_pose_marker"),
                     ],
@@ -495,7 +532,7 @@ def generate_launch_description():
             DeclareLaunchArgument("enable_assets", default_value="true"),
             DeclareLaunchArgument("enable_perception", default_value="true"),
             DeclareLaunchArgument("enable_slam", default_value="true"),
-            DeclareLaunchArgument("use_fast_lio", default_value="false"),
+            DeclareLaunchArgument("use_fast_lio", default_value="true"),
             DeclareLaunchArgument("pointcloud_noise_enabled", default_value="false"),
             DeclareLaunchArgument("pointcloud_noise_mean", default_value="0.0"),
             DeclareLaunchArgument("pointcloud_noise_stddev", default_value="0.015"),
@@ -505,6 +542,10 @@ def generate_launch_description():
             DeclareLaunchArgument("spawn_y", default_value="0.0"),
             DeclareLaunchArgument("spawn_yaw", default_value="0.0"),
             DeclareLaunchArgument("world", default_value=os.path.join(go2_gazebo_pkg, "worlds", "3.world")),
+            DeclareLaunchArgument("cfpa2_w_ig", default_value="1.0", description="CFPA2 info-gain weight"),
+            DeclareLaunchArgument("cfpa2_w_c", default_value="0.6", description="CFPA2 distance-cost weight"),
+            DeclareLaunchArgument("cfpa2_w_momentum", default_value="0.8", description="CFPA2 momentum bonus weight"),
+            DeclareLaunchArgument("cfpa2_min_utility", default_value="-0.5", description="CFPA2 min utility to assign a frontier (below = stop)"),
             OpaqueFunction(function=_launch_setup),
         ]
     )

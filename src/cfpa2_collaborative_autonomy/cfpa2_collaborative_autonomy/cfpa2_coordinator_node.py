@@ -3,14 +3,64 @@
 
 from __future__ import annotations
 
+import ctypes
 import heapq
 import json
 import math
+import os
 import sys
 import time
 from collections import deque
 from pathlib import Path
 from typing import Any, Optional
+
+import numpy as np
+
+# ---------- C++ grid-ops acceleration (optional) ----------
+_GRID_OPS_LIB = None
+try:
+    _here = os.path.dirname(os.path.abspath(__file__))
+    _here_real = os.path.dirname(os.path.realpath(__file__))
+    for _d in (_here, _here_real):
+        _so = os.path.join(_d, "cfpa2_grid_ops.so")
+        if os.path.isfile(_so):
+            _GRID_OPS_LIB = ctypes.CDLL(_so)
+            break
+    _GRID_OPS_LIB.extract_frontiers.restype = ctypes.c_int
+    _GRID_OPS_LIB.extract_frontiers.argtypes = [
+        ctypes.POINTER(ctypes.c_int8),   # grid
+        ctypes.c_int, ctypes.c_int,       # W, H
+        ctypes.c_float, ctypes.c_float, ctypes.c_float,  # res, ox, oy
+        ctypes.c_int,                     # stride
+        ctypes.c_float,                   # min_cluster_area
+        ctypes.c_int,                     # clearance_cells
+        ctypes.c_int8, ctypes.c_int8, ctypes.c_int8,  # free_val, unknown_val, occ_threshold
+        ctypes.POINTER(ctypes.c_float),   # out_x
+        ctypes.POINTER(ctypes.c_float),   # out_y
+        ctypes.c_int,                     # max_out
+    ]
+    _GRID_OPS_LIB.distance_transform.restype = None
+    _GRID_OPS_LIB.distance_transform.argtypes = [
+        ctypes.POINTER(ctypes.c_int8),   # grid
+        ctypes.c_int, ctypes.c_int,       # W, H
+        ctypes.c_int, ctypes.c_int,       # sx, sy
+        ctypes.c_int8,                    # free_val
+        ctypes.POINTER(ctypes.c_int),     # dist_out
+    ]
+    _GRID_OPS_LIB.batch_info_gain.restype = None
+    _GRID_OPS_LIB.batch_info_gain.argtypes = [
+        ctypes.POINTER(ctypes.c_int8),   # grid
+        ctypes.c_int, ctypes.c_int,       # W, H
+        ctypes.c_float, ctypes.c_float, ctypes.c_float,  # res, ox, oy
+        ctypes.POINTER(ctypes.c_float),   # goal_x
+        ctypes.POINTER(ctypes.c_float),   # goal_y
+        ctypes.c_int,                     # n_goals
+        ctypes.c_int,                     # radius
+        ctypes.c_int8,                    # unknown_val
+        ctypes.POINTER(ctypes.c_float),   # gains_out
+    ]
+except Exception:
+    _GRID_OPS_LIB = None
 
 import rclpy
 from geometry_msgs.msg import Point, PointStamped
@@ -20,7 +70,7 @@ from mtare_ros2.msg import GridWorldStatus
 from nav_msgs.msg import OccupancyGrid, Odometry
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
-from std_msgs.msg import String
+from std_msgs.msg import Empty, String
 from visualization_msgs.msg import Marker, MarkerArray
 
 
@@ -111,7 +161,7 @@ class CFPA2Coordinator(Node):
         self.declare_parameter("free_value", 0)
         self.declare_parameter("unknown_value", -1)
         self.declare_parameter("occupancy_block_threshold", 50)
-        self.declare_parameter("switch_hysteresis", 0.05)
+        self.declare_parameter("switch_hysteresis", 0.02)
         self.declare_parameter("switch_min_dist", 0.35)
         self.declare_parameter("min_assign_distance", 0.30)
 
@@ -131,6 +181,8 @@ class CFPA2Coordinator(Node):
         self.declare_parameter("cfpa2_w_c", 0.6)
         self.declare_parameter("cfpa2_w_sw", 0.2)
         self.declare_parameter("cfpa2_lambda_overlap", 1.0)
+        self.declare_parameter("cfpa2_w_momentum", 0.8)
+        self.declare_parameter("cfpa2_min_utility", -0.5)
         self.declare_parameter("cfpa2_sigma_overlap_m", 0.0)
         self.declare_parameter("cfpa2_stuck_lock_sec", 45.0)
         self.declare_parameter("cfpa2_stuck_min_motion_m", 0.20)
@@ -245,6 +297,8 @@ class CFPA2Coordinator(Node):
         self.cfpa2_w_c = max(0.0, float(self.get_parameter("cfpa2_w_c").value))
         self.cfpa2_w_sw = max(0.0, float(self.get_parameter("cfpa2_w_sw").value))
         self.cfpa2_lambda_overlap = max(0.0, float(self.get_parameter("cfpa2_lambda_overlap").value))
+        self.cfpa2_w_momentum = max(0.0, float(self.get_parameter("cfpa2_w_momentum").value))
+        self.cfpa2_min_utility = float(self.get_parameter("cfpa2_min_utility").value)
         self.cfpa2_sigma_overlap_m = max(0.0, float(self.get_parameter("cfpa2_sigma_overlap_m").value))
         self.cfpa2_stuck_lock_sec = max(0.0, float(self.get_parameter("cfpa2_stuck_lock_sec").value))
         self.cfpa2_stuck_min_motion_m = max(
@@ -395,6 +449,9 @@ class CFPA2Coordinator(Node):
         self.local_nav_last_stall_event_count: dict[str, int] = {
             ns: 0 for ns in self.namespaces
         }
+        self._frontier_replan_last_bl_ns: dict[str, int] = {
+            ns: 0 for ns in self.namespaces
+        }
 
         self._warned_missing_shared_map = False
         self._shared_map_fallback_active = False
@@ -451,6 +508,12 @@ class CFPA2Coordinator(Node):
                 lambda m, n=ns: self._nav_status_cb(m, n),
                 10,
             )
+            self.create_subscription(
+                Empty,
+                f"/{ns}/frontier_replan",
+                lambda m, n=ns: self._frontier_replan_cb(n),
+                10,
+            )
             self.goal_pubs[ns] = self.create_publisher(PointStamped, f"/{ns}{self.goal_topic_suffix}", 10)
             self.tare_goal_pubs[ns] = self.create_publisher(PointStamped, f"/{ns}{self.tare_goal_topic_suffix}", 10)
             self.relocation_goal_pubs[ns] = self.create_publisher(
@@ -463,60 +526,26 @@ class CFPA2Coordinator(Node):
         self.timer = self.create_timer(1.0 / self.publish_rate, self._tick)
         self.get_logger().info(f"[planner_startup] {self._startup_label} initialized.")
         self.get_logger().info(
-            f"{self._planner_desc} started for {self.namespaces} | mode={self.algorithm_mode} "
-            f"beta={self.beta:.2f}, sensor_range={self.sensor_range:.2f}, "
-            f"goal_lock_sec={self.goal_lock_sec:.1f}, progress_window_sec={self.progress_window_sec:.1f}, "
-            f"progress_min_delta_m={self.progress_min_delta_m:.2f}, "
-            f"blacklist_fail_count={self.blacklist_fail_count}, blacklist_ttl_sec={self.blacklist_ttl_sec:.1f}, "
-            f"min_assign_distance={self.min_assign_distance:.2f}, "
-            f"reached_blacklist_dist={self.reached_blacklist_dist:.2f}, "
-            f"reached_blacklist_repeat_count={self.reached_blacklist_repeat_count}, "
-            f"reached_blacklist_ttl_sec={self.reached_blacklist_ttl_sec:.1f}, "
-            f"overlap_weight={self.overlap_weight:.2f}, "
-            f"cfpa2_w_ig={self.cfpa2_w_ig:.2f}, "
-            f"cfpa2_w_c={self.cfpa2_w_c:.2f}, "
-            f"cfpa2_w_sw={self.cfpa2_w_sw:.2f}, "
-            f"cfpa2_lambda_overlap={self.cfpa2_lambda_overlap:.2f}, "
-            f"cfpa2_sigma_overlap_m={self.cfpa2_sigma_overlap_m:.2f}, "
-            f"cfpa2_stuck_lock_sec={self.cfpa2_stuck_lock_sec:.1f}, "
-            f"cfpa2_stuck_min_motion_m={self.cfpa2_stuck_min_motion_m:.2f}, "
-            f"cfpa2_stuck_blacklist_sec={self.cfpa2_stuck_blacklist_sec:.1f}, "
-            f"local_nav_status_stale_sec={self.local_nav_status_stale_sec:.1f}, "
-            f"local_nav_stall_blacklist_sec={self.local_nav_stall_blacklist_sec:.1f}, "
-            f"cfpa2_close_stop_radius_m={self.cfpa2_close_stop_radius_m:.2f}, "
-            f"cfpa2_space_time_enabled={self.cfpa2_space_time_enabled} "
-            f"cfpa2_space_time_horizon_sec={self.cfpa2_space_time_horizon_sec:.1f} "
-            f"cfpa2_space_time_dt_sec={self.cfpa2_space_time_dt_sec:.2f} "
-            f"cfpa2_space_time_safety_radius_m={self.cfpa2_space_time_safety_radius_m:.2f} "
-            f"cfpa2_space_time_waypoint_lookahead_m={self.cfpa2_space_time_waypoint_lookahead_m:.2f} "
-            f"cfpa2_space_time_window_margin_m={self.cfpa2_space_time_window_margin_m:.1f} "
-            f"cfpa2_space_time_max_expansions={self.cfpa2_space_time_max_expansions} "
-            f"cfpa2_space_time_assumed_speed_mps={self.cfpa2_space_time_assumed_speed_mps:.2f} "
-            f"cfpa2_space_time_max_speed_mps={self.cfpa2_space_time_max_speed_mps:.2f} "
-            f"cfpa2_frontier_min_cluster_area_m2={self.cfpa2_frontier_min_cluster_area_m2:.2f} "
-            f"communication_timeout_sec={self.communication_timeout_sec:.2f}, "
-            f"prediction_horizon_sec={self.prediction_horizon_sec:.2f}, "
-            f"pursuit_weight={self.pursuit_weight:.2f}, "
-            f"pursuit_switch_margin={self.pursuit_switch_margin:.2f}, "
-            f"exploration_gain_radius_cells={self.exploration_gain_radius_cells}, "
-            f"meeting_min_distance={self.meeting_min_distance:.2f}, "
-            f"teammate_stale_ttl_sec={self.teammate_stale_ttl_sec:.2f}, "
-            f"mui_resolve_period_sec={self.mui_resolve_period_sec:.2f}, "
-            f"mui_mdvrp_time_limit_sec={self.mui_mdvrp_time_limit_sec:.2f}, "
-            f"mui_max_exploring_cells={self.mui_max_exploring_cells}, "
-            f"mui_cell_merge_resolution_m={self.mui_cell_merge_resolution_m:.2f}, "
-            f"mui_unreachable_penalty_m={self.mui_unreachable_penalty_m:.1f}, "
-            f"output_mode={self.output_mode} "
-            f"goal_topic_suffix={self.goal_topic_suffix} "
-            f"tare_goal_topic_suffix={self.tare_goal_topic_suffix} "
-            f"relocation_goal_topic_suffix={self.relocation_goal_topic_suffix} "
-            f"use_shared_map={self.use_shared_map} shared_map_topic={self.shared_map_topic} "
-            f"shared_map_wait_sec={self.shared_map_wait_sec:.1f} "
-            f"shared_map_local_patch_radius_m={self.shared_map_local_patch_radius_m:.2f} "
-            f"perf_enable={self.perf_enable} "
-            f"perf_tick_warn_p95_ms={self.perf_tick_warn_p95_ms:.1f} "
-            f"perf_cpu_warn_pct={self.perf_cpu_warn_pct:.1f} "
-            f"adaptive_load_shedding_enabled={self.adaptive_load_shedding_enabled}"
+            f"{self._planner_desc} started for {self.namespaces}\n"
+            f"  mode={self.algorithm_mode}  output={self.output_mode}\n"
+            f"  ── Utility weights ──\n"
+            f"    w_ig={self.cfpa2_w_ig:.2f}  w_c={self.cfpa2_w_c:.2f}  "
+            f"w_sw={self.cfpa2_w_sw:.2f}  w_momentum={self.cfpa2_w_momentum:.2f}  "
+            f"min_utility={self.cfpa2_min_utility:.2f}\n"
+            f"  ── Frontier ──\n"
+            f"    sensor_range={self.sensor_range:.1f}m  "
+            f"gain_radius={self.exploration_gain_radius_cells}cells  "
+            f"min_cluster={self.cfpa2_frontier_min_cluster_area_m2:.2f}m²  "
+            f"beta={self.beta:.2f}\n"
+            f"  ── Assignment ──\n"
+            f"    min_dist={self.min_assign_distance:.2f}m  "
+            f"switch_hysteresis={self.switch_hysteresis:.3f}  "
+            f"goal_lock={self.goal_lock_sec:.0f}s\n"
+            f"  ── Stuck / blacklist ──\n"
+            f"    stuck_lock={self.cfpa2_stuck_lock_sec:.0f}s  "
+            f"stuck_motion={self.cfpa2_stuck_min_motion_m:.2f}m  "
+            f"bl_ttl={self.blacklist_ttl_sec:.0f}s  "
+            f"reached_bl_dist={self.reached_blacklist_dist:.2f}m"
         )
 
     def _map_cb(self, msg: OccupancyGrid, ns: str) -> None:
@@ -544,6 +573,38 @@ class CFPA2Coordinator(Node):
             return
         self.nav_status[ns] = payload
         self.nav_status_rx_time_ns[ns] = self.get_clock().now().nanoseconds
+
+    def _frontier_replan_cb(self, ns: str) -> None:
+        """Reactive nav signals it cannot reach the current goal."""
+        now_ns = self.get_clock().now().nanoseconds
+        current_goal = self.last_goal.get(ns)
+        if current_goal is None:
+            return
+
+        key = self._goal_key(current_goal)
+
+        # Skip if this goal is already blacklisted.
+        if self.goal_blacklist_until_ns[ns].get(key, 0) > now_ns:
+            return
+
+        # Cooldown: don't blacklist more often than once per 10s per namespace.
+        last_bl_ns = self._frontier_replan_last_bl_ns.get(ns, 0)
+        if (now_ns - last_bl_ns) < int(10e9):
+            return
+        self._frontier_replan_last_bl_ns[ns] = now_ns
+
+        bl_sec = max(self.local_nav_stall_blacklist_sec, 20.0)
+        until_ns = now_ns + int(bl_sec * 1e9)
+        self.goal_blacklist_until_ns[ns][key] = max(
+            self.goal_blacklist_until_ns[ns].get(key, 0),
+            until_ns,
+        )
+        self.goal_fail_counts[ns][key] = 0
+        self.goal_progress_samples[ns].clear()
+        self.get_logger().warn(
+            f"{ns}: frontier_replan received — blacklisting current goal "
+            f"({current_goal[0]:.2f},{current_goal[1]:.2f}) for {bl_sec:.1f}s."
+        )
 
     def _shared_map_cb(self, msg: OccupancyGrid) -> None:
         self.shared_map = msg
@@ -622,12 +683,36 @@ class CFPA2Coordinator(Node):
     def _extract_frontiers(self, msg: OccupancyGrid) -> list[tuple[float, float]]:
         w = int(msg.info.width)
         h = int(msg.info.height)
-        data = msg.data
         res = max(1e-6, float(msg.info.resolution))
-        out: list[tuple[float, float]] = []
         s = max(1, self._adaptive_frontier_stride)
         min_area_m2 = self.cfpa2_frontier_min_cluster_area_m2
         clearance_cells = int(math.ceil(self.cfpa2_frontier_obstacle_clearance_m / res))
+        max_targets = self._adaptive_max_targets
+
+        if _GRID_OPS_LIB is not None:
+            return self._extract_frontiers_cpp(msg, w, h, res, s, min_area_m2, clearance_cells, max_targets)
+        return self._extract_frontiers_py(msg, w, h, res, s, min_area_m2, clearance_cells, max_targets)
+
+    def _extract_frontiers_cpp(self, msg, w, h, res, s, min_area_m2, clearance_cells, max_targets):
+        grid_np = np.array(msg.data, dtype=np.int8)
+        ox = float(msg.info.origin.position.x)
+        oy = float(msg.info.origin.position.y)
+        out_x = (ctypes.c_float * max_targets)()
+        out_y = (ctypes.c_float * max_targets)()
+        n = _GRID_OPS_LIB.extract_frontiers(
+            grid_np.ctypes.data_as(ctypes.POINTER(ctypes.c_int8)),
+            w, h, res, ox, oy,
+            s, min_area_m2, clearance_cells,
+            ctypes.c_int8(self.free_value),
+            ctypes.c_int8(self.unknown_value),
+            ctypes.c_int8(self.occ_thresh),
+            out_x, out_y, max_targets,
+        )
+        return [(float(out_x[i]), float(out_y[i])) for i in range(n)]
+
+    def _extract_frontiers_py(self, msg, w, h, res, s, min_area_m2, clearance_cells, max_targets):
+        data = msg.data
+        out: list[tuple[float, float]] = []
         neighbor8 = ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, 1), (1, -1), (-1, -1))
 
         frontier_mask = [False] * (w * h)
@@ -688,7 +773,7 @@ class CFPA2Coordinator(Node):
                 if not self._has_frontier_obstacle_clearance(data, gx, gy, w, h, clearance_cells):
                     continue
                 out.append(self._grid_to_world(msg, gx, gy))
-                if len(out) >= self._adaptive_max_targets:
+                if len(out) >= max_targets:
                     return out
         return out
 
@@ -699,8 +784,28 @@ class CFPA2Coordinator(Node):
 
         w = int(msg.info.width)
         h = int(msg.info.height)
-        data = msg.data
         sx, sy = start
+
+        if _GRID_OPS_LIB is not None:
+            return self._distance_transform_cpp(msg, w, h, sx, sy)
+        return self._distance_transform_py(msg, w, h, sx, sy)
+
+    def _distance_transform_cpp(self, msg, w, h, sx, sy):
+        grid_np = np.array(msg.data, dtype=np.int8)
+        dist_np = np.full(w * h, -1, dtype=np.int32)
+        _GRID_OPS_LIB.distance_transform(
+            grid_np.ctypes.data_as(ctypes.POINTER(ctypes.c_int8)),
+            w, h, sx, sy,
+            ctypes.c_int8(self.free_value),
+            dist_np.ctypes.data_as(ctypes.POINTER(ctypes.c_int)),
+        )
+        # Store flat array for fast lookup; _grid_path_cost_m uses dict[int, int]
+        # Convert to dict only for reachable cells
+        indices = np.where(dist_np >= 0)[0]
+        return dict(zip(indices.tolist(), dist_np[indices].tolist()))
+
+    def _distance_transform_py(self, msg, w, h, sx, sy):
+        data = msg.data
         sidx = self._grid_index(sx, sy, w)
 
         if not self._is_free(data, sidx):
@@ -939,6 +1044,12 @@ class CFPA2Coordinator(Node):
             self._set_policy_reason(ns, "switch/no_previous_goal")
             return goal
 
+        # Never hold a blacklisted goal — force switch to the new candidate.
+        now_ns = self.get_clock().now().nanoseconds
+        if self._is_blacklisted(ns, last, now_ns):
+            self._set_policy_reason(ns, "switch/held_goal_blacklisted")
+            return goal
+
         od = self.odoms[ns]
         rx = float(od.pose.pose.position.x)
         ry = float(od.pose.pose.position.y)
@@ -965,8 +1076,9 @@ class CFPA2Coordinator(Node):
         dist_map: dict[int, int],
         now_ns: int,
     ) -> tuple[float, float]:
-        if self.algorithm_mode != "committed":
-            return self._apply_switch_hysteresis(ns, candidate_goal, assignment_score)
+        # Use committed-style policy for ALL modes (progress-based hold,
+        # goal_lock, stall detection).  The weaker switch_hysteresis was
+        # allowing premature goal switches mid-navigation.
 
         last = self.last_goal.get(ns)
         if last is None:
@@ -1026,6 +1138,7 @@ class CFPA2Coordinator(Node):
         per_ns_frontiers: dict[str, int],
         per_ns_reachable: dict[str, int],
         per_ns_assigned: dict[str, tuple[float, float]],
+        per_ns_utilities: dict[str, dict[tuple[float, float], float]] | None = None,
     ) -> None:
         now_ns = self.get_clock().now().nanoseconds
         if self._last_summary_ns == 0:
@@ -1047,13 +1160,31 @@ class CFPA2Coordinator(Node):
             if set_ns > 0:
                 age_txt = f"{max(0.0, (now_ns - set_ns) / 1e9):.1f}"
             policy = self.last_policy_reason.get(ns, "-")
+            # Show assigned goal's utility if available
+            util_txt = "-"
+            top_txt = ""
+            if per_ns_utilities and ns in per_ns_utilities:
+                ns_utils = per_ns_utilities[ns]
+                if goal is not None and goal in ns_utils:
+                    util_txt = f"{ns_utils[goal]:.2f}"
+                # Show top-3 candidates
+                sorted_goals = sorted(ns_utils.items(), key=lambda kv: kv[1], reverse=True)[:3]
+                if sorted_goals:
+                    top_parts = [f"({g[0]:.1f},{g[1]:.1f})={s:.2f}" for g, s in sorted_goals]
+                    top_txt = f" top3=[{' '.join(top_parts)}]"
+            speed_txt = ""
+            vx, vy = self.odom_velocity_xy.get(ns, (0.0, 0.0))
+            spd = math.hypot(float(vx), float(vy))
+            if spd > 0.03:
+                speed_txt = f" spd={spd:.2f}"
             parts.append(
-                f"{ns}:frontiers={per_ns_frontiers.get(ns, 0)} "
-                f"reachable={per_ns_reachable.get(ns, 0)} goal={goal_txt} "
-                f"d={dist_txt} age={age_txt}s policy={policy}"
+                f"{ns}: fronts={per_ns_frontiers.get(ns, 0)} "
+                f"reach={per_ns_reachable.get(ns, 0)} "
+                f"goal={goal_txt} d={dist_txt} u={util_txt} "
+                f"age={age_txt}s{speed_txt} [{policy}]{top_txt}"
             )
         self.get_logger().info(
-            f"ASSIGN step[{self.algorithm_mode}]: targets={targets_total} | " + " | ".join(parts)
+            f"ASSIGN [{self.algorithm_mode}] targets={targets_total}\n  " + "\n  ".join(parts)
         )
 
     def _map_cell_stats(self, msg: OccupancyGrid) -> tuple[int, int, int]:
@@ -1103,21 +1234,11 @@ class CFPA2Coordinator(Node):
             f"shared_map_ready={self.shared_map is not None}",
         ]
         for ns in self.namespaces:
-            local_map = self.maps.get(ns)
-            local_stats = "no_map"
-            if local_map is not None:
-                l_free, l_occ, l_unk = self._map_cell_stats(local_map)
-                local_stats = f"free={l_free} occ={l_occ} unk={l_unk}"
             frontier_n = len(per_ns_targets.get(ns, []))
-            dist_n = -1 if dist_maps is None else len(dist_maps.get(ns, {}))
-            util_n = -1 if utilities_sizes is None else int(utilities_sizes.get(ns, 0))
-            has_candidate = False if candidate_goals is None else (ns in candidate_goals)
-            has_assigned = False if per_ns_assigned is None else (ns in per_ns_assigned)
-            parts.append(
-                f"{ns}(fronts={frontier_n} dist_cells={dist_n} utils={util_n} "
-                f"candidate={int(has_candidate)} assigned={int(has_assigned)} local={local_stats})"
-            )
-        self.get_logger().warn(" | ".join(parts))
+            parts.append(f"{ns}: fronts={frontier_n}")
+        self.get_logger().warn(
+            f"NO_GOAL [{reason}] map(free={p_free} occ={p_occ} unk={p_unk}) | " + " | ".join(parts)
+        )
 
     @staticmethod
     def _percentile(sorted_values: list[float], quantile: float) -> float:
@@ -1517,6 +1638,37 @@ class CFPA2Coordinator(Node):
                     gain += 1.0
         return gain
 
+    def _batch_frontier_information_gain(
+        self, msg: OccupancyGrid, goals: list[tuple[float, float]]
+    ) -> list[float]:
+        """Batch info-gain for all goals at once (C++ accelerated)."""
+        if not goals:
+            return []
+        w = int(msg.info.width)
+        h = int(msg.info.height)
+        r = self._adaptive_exploration_gain_radius_cells
+        n = len(goals)
+
+        if _GRID_OPS_LIB is not None:
+            grid_np = np.array(msg.data, dtype=np.int8)
+            ox = float(msg.info.origin.position.x)
+            oy = float(msg.info.origin.position.y)
+            res = float(msg.info.resolution)
+            gx_arr = (ctypes.c_float * n)(*(g[0] for g in goals))
+            gy_arr = (ctypes.c_float * n)(*(g[1] for g in goals))
+            gains_out = (ctypes.c_float * n)()
+            _GRID_OPS_LIB.batch_info_gain(
+                grid_np.ctypes.data_as(ctypes.POINTER(ctypes.c_int8)),
+                w, h, res, ox, oy,
+                gx_arr, gy_arr, n, r,
+                ctypes.c_int8(self.unknown_value),
+                gains_out,
+            )
+            return [float(gains_out[i]) for i in range(n)]
+
+        # Python fallback
+        return [self._frontier_information_gain(msg, g) for g in goals]
+
     def _grid_path_cost_m(
         self,
         msg: OccupancyGrid,
@@ -1549,11 +1701,16 @@ class CFPA2Coordinator(Node):
         if dist_m is None or dist_m <= 0.0:
             return -1e18
         info_gain = self._frontier_information_gain(map_msg, goal)
+        # Reject frontiers with negligible info-gain (tiny slivers near walls)
+        if info_gain < 3:
+            return -1e18
         switch_penalty = self._cfpa2_switch_penalty(ns, goal)
+        momentum_bonus = self._cfpa2_momentum_bonus(ns, goal)
         return (
             (self.cfpa2_w_ig * info_gain)
             - (self.cfpa2_w_c * dist_m)
             - (self.cfpa2_w_sw * switch_penalty)
+            + (self.cfpa2_w_momentum * momentum_bonus)
         )
 
     def _cfpa2_overlap_penalty(self, goal_i: tuple[float, float], goal_j: tuple[float, float]) -> float:
@@ -1573,6 +1730,45 @@ class CFPA2Coordinator(Node):
     def _cfpa2_momentum(self, ns: str) -> float:
         vx, vy = self.odom_velocity_xy.get(ns, (0.0, 0.0))
         return math.hypot(float(vx), float(vy))
+
+    def _cfpa2_momentum_bonus(self, ns: str, goal: tuple[float, float]) -> float:
+        """Heading + velocity momentum bonus.
+
+        bonus = cos(heading_to_frontier) × (α + β × speed)
+
+        α (base, 0.5): heading-only component — even when stopped, frontiers
+          behind the robot get penalized.  This prevents backtracking at
+          waypoint stops.
+        β (velocity scale, 1.0): scales up the bonus when the robot is moving,
+          making it very expensive to switch direction mid-stride.
+        """
+        odom = self.odoms.get(ns)
+        if odom is None:
+            return 0.0
+        rx = float(odom.pose.pose.position.x)
+        ry = float(odom.pose.pose.position.y)
+        dx = goal[0] - rx
+        dy = goal[1] - ry
+        d = math.hypot(dx, dy)
+        if d < 0.1:
+            return 0.0
+
+        # Extract yaw from quaternion
+        q = odom.pose.pose.orientation
+        siny = 2.0 * (float(q.w) * float(q.z) + float(q.x) * float(q.y))
+        cosy = 1.0 - 2.0 * (float(q.y) * float(q.y) + float(q.z) * float(q.z))
+        yaw = math.atan2(siny, cosy)
+
+        # cos(angle between heading and frontier direction)
+        cos_angle = (math.cos(yaw) * dx + math.sin(yaw) * dy) / d
+
+        # Velocity boost
+        vx, vy = self.odom_velocity_xy.get(ns, (0.0, 0.0))
+        speed = math.hypot(float(vx), float(vy))
+
+        alpha = 0.5   # base heading weight (always active)
+        beta = 1.0    # velocity scale
+        return cos_angle * (alpha + beta * speed)
 
     def _find_nearest_free_cell(
         self,

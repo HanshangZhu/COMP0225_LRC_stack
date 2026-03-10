@@ -11,13 +11,13 @@
     settle_speed_threshold: 0.08
     settle_hold_sec: 1.5
 
-    obstacle_slow_dist: 0.80
-    obstacle_stop_dist: 0.38
-    front_half_angle_deg: 40.0
+    obstacle_slow_dist: 0.90
+    obstacle_stop_dist: 0.40
+    front_half_angle_deg: 35.0
     side_check_angle_deg: 60.0
-    avoidance_gain: 1.05
+    avoidance_gain: 1.1
     avoidance_deadband: 0.08
-    avoidance_max_ratio: 0.20
+    avoidance_max_ratio: 0.25
     avoidance_conflict_scale: 0.10
     turn_in_place_on_block: true
 
@@ -30,12 +30,13 @@
     planner_invalid_replan_count: 3
     planner_grid_radius: 4.5
     planner_resolution: 0.10
-    planner_inflation_radius: 0.28
+    planner_inflation_radius: 0.50
     planner_goal_clip_distance: 4.0
     planner_goal_search_radius: 1.6
     planner_start_clearance_radius: 0.12
     planner_waypoint_spacing: 0.30
     planner_waypoint_lookahead: 0.85
+    planner_safety_clearance: 0.55
     planner_unknown_is_obstacle: false
 
     # Go2W has zero turning radius (pivot in place) — straight segments are optimal.
@@ -53,8 +54,8 @@
     escape_waypoint_hold_sec: 4.0
     escape_waypoint_reach_tol: 0.30
 
-    blocked_replan_sec: 0.6
-    blocked_replan_cooldown_sec: 1.5
+    blocked_replan_sec: 0.4
+    blocked_replan_cooldown_sec: 1.0
     blocked_progress_epsilon: 0.06
 
     stall_recovery_enabled: true
@@ -70,3 +71,9 @@
     unstick_reverse_sec: 0.8
     unstick_turn_speed: 0.55
     unstick_min_rear_clearance: 0.55
+
+    # Pre-emptive give-way at T-junctions: reverse before turning when
+    # sharp turn needed + low front clearance.  Prevents getting stuck.
+    tight_turn_preempt_enabled: true
+    tight_turn_angle_threshold_deg: 70.0   # waypoint requires turn > this
+    tight_turn_min_front_clearance: 0.60   # and front clearance < this
