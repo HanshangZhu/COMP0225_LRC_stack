@@ -1,6 +1,3 @@
-[submodule "src/unitree-go2-ros2"]
-	path = src/unitree-go2-ros2
-	url = https://github.com/HanshangZhu/unitree-go2-ros2.git
 [submodule "src/fast_lio"]
 	path = src/fast_lio
 	url = https://github.com/HanshangZhu/FAST_LIO_ROS2.git
