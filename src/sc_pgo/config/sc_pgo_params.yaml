@@ -1,0 +1,26 @@
+/**:
+  ros__parameters:
+    # Keyframe thresholds — denser for small indoor rooms
+    keyframe_meter_gap: 0.5    # metres between keyframes (was 1.0)
+    keyframe_deg_gap: 15.0     # degrees between keyframes
+
+    # Scan Context — tuned for symmetric indoor environments
+    sc_max_radius: 15.0        # max descriptor radius (smaller for indoor)
+    sc_dist_threshold: 0.4     # SC distance threshold (slightly looser for symmetric rooms)
+    sc_exclude_recent: 15      # skip recent N keyframes (was 25, allow earlier loop detect)
+    sc_candidates_num: 10      # top-K ring-key candidates to check
+    sc_num_rings: 20
+    sc_num_sectors: 60
+
+    # ICP verification
+    icp_max_correspondence_dist: 2.0
+    icp_fitness_threshold: 0.3
+    icp_max_iterations: 100
+
+    # Voxel filter sizes
+    filter_size: 0.1
+    map_viz_filter_size: 0.1
+
+    # Frame IDs — camera_init = Point-LIO world frame, aft_pgo = PGO-corrected body
+    frame_id: "camera_init"
+    child_frame_id: "aft_pgo"

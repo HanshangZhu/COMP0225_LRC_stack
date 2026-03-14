@@ -21,6 +21,7 @@ install(PROGRAMS
   scripts/go2w_startup_mode.py
   scripts/autonomy_enabler.py
   scripts/cmd_vel_activity_mux.py
+  scripts/cmd_vel_to_sport_bridge.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

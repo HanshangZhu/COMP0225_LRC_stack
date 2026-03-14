@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
-"""Relay SLAM odometry to navigation odometry with optional GT bootstrap."""
+"""Relay SLAM odometry to navigation odometry with optional GT bootstrap.
+
+Supports dual-source: when SC-PGO's /corrected_odom is available and fresh,
+use it instead of raw SLAM odom. Falls back to raw odom transparently
+when SC-PGO isn't running or hasn't detected a loop yet.
+"""
 import math
+import time
 
 import rclpy
 from rclpy.node import Node
@@ -18,6 +24,9 @@ class SlamOdomRelay(Node):
         self.declare_parameter("bootstrap_from_gt", False)
         self.declare_parameter("gt_topic", "/odom/ground_truth")
         self.declare_parameter("require_gt_for_alignment", True)
+        # SC-PGO corrected odom (loop closure backend)
+        self.declare_parameter("corrected_odom_topic", "/corrected_odom")
+        self.declare_parameter("corrected_odom_staleness_sec", 2.0)
 
         input_topic = self.get_parameter("input_topic").value
         output_topic = self.get_parameter("output_topic").value
@@ -27,11 +36,22 @@ class SlamOdomRelay(Node):
         self.gt_topic = str(self.get_parameter("gt_topic").value)
         self.require_gt_for_alignment = bool(self.get_parameter("require_gt_for_alignment").value)
 
+        corrected_topic = self.get_parameter("corrected_odom_topic").value
+        self.corrected_staleness = self.get_parameter("corrected_odom_staleness_sec").value
+
         self.sub = self.create_subscription(Odometry, input_topic, self.relay_cb, 10)
         self.pub = self.create_publisher(Odometry, output_topic, 10)
         self.gt_sub = None
         if self.bootstrap_from_gt:
             self.gt_sub = self.create_subscription(Odometry, self.gt_topic, self.gt_cb, 10)
+
+        # SC-PGO corrected odom subscription
+        self.corrected_odom: Odometry | None = None
+        self.corrected_odom_time = 0.0
+        self.corrected_odom_count = 0
+        self.using_corrected = False
+        self.corrected_sub = self.create_subscription(
+            Odometry, corrected_topic, self.corrected_cb, 10)
 
         self.msg_count = 0
         self.latest_gt: Odometry | None = None
@@ -44,10 +64,24 @@ class SlamOdomRelay(Node):
             f"SLAM odom relay: {input_topic} -> {output_topic} "
             f"(frame: {self.output_frame} -> {self.output_child_frame})"
         )
+        self.get_logger().info(
+            f"SC-PGO corrected odom: {corrected_topic} "
+            f"(staleness={self.corrected_staleness}s)"
+        )
         if self.bootstrap_from_gt:
             self.get_logger().info(
                 f"GT bootstrap enabled: gt_topic={self.gt_topic}, require_gt_for_alignment={self.require_gt_for_alignment}"
             )
+
+    def corrected_cb(self, msg: Odometry):
+        """Receive PGO-corrected odom from SC-PGO."""
+        self.corrected_odom = msg
+        self.corrected_odom_time = time.monotonic()
+        self.corrected_odom_count += 1
+        if self.corrected_odom_count == 1:
+            self.get_logger().info("SC-PGO corrected odom received — switching to corrected source")
+        if not self.using_corrected:
+            self.using_corrected = True
 
     def gt_cb(self, msg: Odometry):
         self.latest_gt = msg
@@ -91,6 +125,24 @@ class SlamOdomRelay(Node):
         self.pub.publish(out)
 
     def relay_cb(self, msg: Odometry):
+        # If SC-PGO corrected odom is available and fresh, use it instead
+        if self.corrected_odom is not None:
+            age = time.monotonic() - self.corrected_odom_time
+            if age < self.corrected_staleness:
+                self.publish_with_frames(self.corrected_odom)
+                self.msg_count += 1
+                if self.msg_count % 100 == 1:
+                    p = self.corrected_odom.pose.pose.position
+                    self.get_logger().info(
+                        f"Relayed {self.msg_count} msgs (CORRECTED) | "
+                        f"pose=({p.x:.2f}, {p.y:.2f}, {p.z:.2f})"
+                    )
+                return
+            elif self.using_corrected:
+                self.using_corrected = False
+                self.get_logger().warn(
+                    f"SC-PGO corrected odom stale ({age:.1f}s) — falling back to raw")
+
         if not self.alignment_ready:
             if self.bootstrap_from_gt and self.latest_gt is None and self.require_gt_for_alignment:
                 return

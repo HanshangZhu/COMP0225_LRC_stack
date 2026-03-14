@@ -81,12 +81,17 @@ public:
     scores_.assign(static_cast<size_t>(n_cells), 0);
     observed_.assign(static_cast<size_t>(n_cells), false);
 
-    // TF2: buffer + listener + broadcaster
-    // The odom subscriber feeds the broadcaster so that we have a
-    // map_frame -> base_link transform chain for TF lookup.
+    // broadcast_tf: When true (default), the mapper broadcasts map -> base_link
+    // from odom.  Works for Gazebo where slam_odom_relay provides odom.
+    // Set false for real-robot Cartographer, which already provides the full
+    // TF chain (map -> odom -> body -> base_link) and would conflict.
+    broadcast_tf_ = declare_parameter<bool>("broadcast_tf", true);
+
     tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
     tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
-    tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(*this);
+    if (broadcast_tf_) {
+      tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(*this);
+    }
 
     const auto scan_qos = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort();
     const auto odom_qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable();
@@ -97,13 +102,15 @@ public:
         last_scan_ = msg;
       });
 
-    // Odom sub: broadcast as TF so we can interpolate at scan timestamps
+    // Odom sub: omega gating, scan-odom dt, and optional TF broadcast
     odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
       odom_topic_, odom_qos,
       [this](const nav_msgs::msg::Odometry::SharedPtr msg) {
         last_odom_ = msg;
         odom_omega_ = msg->twist.twist.angular.z;
-        broadcast_odom_tf(msg);
+        if (broadcast_tf_) {
+          broadcast_odom_tf(msg);
+        }
       });
 
     // TRANSIENT_LOCAL durability: standard for map topics.
@@ -201,7 +208,7 @@ private:
     }
   }
 
-  // Broadcast odom as TF so the buffer can interpolate for scan timestamps
+  // Broadcast odom as TF (only when broadcast_tf_ == true)
   void broadcast_odom_tf(const OdomMsg::SharedPtr & msg)
   {
     geometry_msgs::msg::TransformStamped t;
@@ -214,6 +221,7 @@ private:
     t.transform.rotation = msg->pose.pose.orientation;
     tf_broadcaster_->sendTransform(t);
   }
+
 
   void publish_map(const builtin_interfaces::msg::Time & stamp)
   {
@@ -462,6 +470,7 @@ private:
   ScanMsg::SharedPtr last_scan_;
   OdomMsg::SharedPtr last_odom_;
 
+  bool broadcast_tf_{true};
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
   std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
