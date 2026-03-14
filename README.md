@@ -128,9 +128,9 @@ ros2 launch go2_real_bringup single_go2w_real_cfpa2.launch.py
 │   ├── fast_lio/                 Fast-LIO2 (submodule)
 │   ├── go2_ros2_sdk/             Unitree ROS2 SDK (WebRTC)
 │   ├── go2_tare_planner_ros2/   TARE planner port
-│   ├── autonomy_stack_go2/       CMU autonomy stack (submodule)
-│   ├── unitree-go2-ros2/         CHAMP controller (submodule)
-│   ├── unitree_go2w_ros2/        Go2W driver (wheels + legs)
+│   ├── autonomy_stack_go2/       CMU autonomy stack (inlined)
+│   ├── unitree-go2-ros2/         CHAMP controller + Go2 URDF (inlined)
+│   ├── unitree_go2w_ros2/        Go2W URDF + driver (inlined)
 │   ├── librealsense/             Intel RealSense SDK
 │   ├── stale/                    Deprecated packages (COLCON_IGNORE'd)
 │   └── mtare_ros1_ws/            ROS1 planner (COLCON_IGNORE'd)
@@ -143,9 +143,9 @@ ros2 launch go2_real_bringup single_go2w_real_cfpa2.launch.py
 ## Further Reading
 
 - [ARCHITECTURE.md](docs/ARCHITECTURE.md) — system design, data pipeline, node graph
+- [PACKAGES.md](docs/PACKAGES.md) — all ROS 2 packages in `src/` with descriptions
 - [CONFIGURATION.md](docs/CONFIGURATION.md) — config files, Gazebo worlds, SLAM backends
 - [WALKTHROUGH.md](docs/WALKTHROUGH.md) — full implementation walkthrough
-- [CONTEXT_HANDOFF.md](docs/CONTEXT_HANDOFF.md) — session-to-session development notes
 - [AGENTS.md](AGENTS.md) — AI assistant instructions + debugging methodology
 - [Reproducibility guide](docs/research/reproducibility.md) — system packages, env setup
 - [Open problems](docs/research/open_problems.md) — known issues and TODOs
@@ -156,7 +156,8 @@ ros2 launch go2_real_bringup single_go2w_real_cfpa2.launch.py
 
 | Path | Remote |
 |---|---|
-| `src/autonomy_stack_go2` | `https://github.com/HanshangZhu/autonomy_stack_go2.git` |
 | `src/fast_lio` | `https://github.com/HanshangZhu/FAST_LIO_ROS2.git` |
-| `src/unitree-go2-ros2` | `https://github.com/HanshangZhu/unitree-go2-ros2.git` |
+| `src/go2_ros2_sdk` | `https://github.com/abizovnuralem/go2_ros2_sdk.git` |
 | `src/mtare_ros1_ws/src/mtare_planner` | `https://github.com/HanshangZhu/tare_planner.git` |
+
+> `autonomy_stack_go2`, `unitree-go2-ros2`, and `unitree_go2w_ros2` have been inlined as regular code.
