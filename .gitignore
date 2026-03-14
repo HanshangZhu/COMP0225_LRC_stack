@@ -58,3 +58,6 @@ imu_calib_data.yaml*
 
 # Artifacts
 /artifacts/
+# Tool build artifacts
+tools/slam/reconstruct_scene/build/
+tools/slam/scan_editor
