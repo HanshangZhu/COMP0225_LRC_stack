@@ -91,8 +91,8 @@ if [[ -z "${GAZEBO_MASTER_URI:-}" ]]; then
   export GAZEBO_MASTER_URI="http://127.0.0.1:${GAZEBO_PORT}"
 fi
 
-if [[ -z "${FASTRTPS_DEFAULT_PROFILES_FILE:-}" && -f "${WS_DIR}/fastdds_no_shm.xml" ]]; then
-  export FASTRTPS_DEFAULT_PROFILES_FILE="${WS_DIR}/fastdds_no_shm.xml"
+if [[ -z "${FASTRTPS_DEFAULT_PROFILES_FILE:-}" && -f "${WS_DIR}/config/fastdds_no_shm.xml" ]]; then
+  export FASTRTPS_DEFAULT_PROFILES_FILE="${WS_DIR}/config/fastdds_no_shm.xml"
 fi
 
 echo "Using GAZEBO_MASTER_URI=${GAZEBO_MASTER_URI}"
