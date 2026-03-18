@@ -1,0 +1,34 @@
+octomap_server:
+  ros__parameters:
+    # === Octomap 3D → 2D projected occupancy grid ===
+    resolution: 0.05
+    frame_id: "map"
+    base_frame_id: "base_link"
+    sensor_model:
+      max_range: 8.0
+      hit: 0.7
+      miss: 0.4
+      min: 0.12
+      max: 0.97
+
+    # Height band — match pointcloud_to_laserscan [-0.25, 0.60]
+    point_cloud_min_z: -0.30
+    point_cloud_max_z: 1.50
+    occupancy_min_z: -0.25
+    occupancy_max_z: 0.60
+
+    # Ground filtering
+    filter_ground_plane: true
+    ground_filter.distance: 0.04
+    ground_filter.angle: 0.15
+    ground_filter.plane_distance: 0.07
+
+    # 2D projection
+    incremental_2D_projection: true
+    publish_free_space: true
+    use_height_map: true
+    compress_map: true
+    latch: false
+
+    # Filter speckle noise
+    filter_speckles: true
