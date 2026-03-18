@@ -61,3 +61,8 @@ imu_calib_data.yaml*
 # Tool build artifacts
 tools/slam/reconstruct_scene/build/
 tools/slam/scan_editor
+
+*.tex
+
+# Ignore large Isaac Sim USD models for LFS
+/src/stale/go2_issac_stack/assets/
