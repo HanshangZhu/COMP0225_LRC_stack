@@ -4,3 +4,19 @@
 [submodule "src/mtare_ros1_ws/src/mtare_planner"]
 	path = src/mtare_ros1_ws/src/mtare_planner
 	url = https://github.com/HanshangZhu/tare_planner.git
+
+[submodule "src/BALM"]
+	path = src/BALM
+	url = https://github.com/hku-mars/BALM.git
+
+[submodule "src/go2_ros2_sdk"]
+	path = src/go2_ros2_sdk
+	url = https://github.com/abizovnuralem/go2_ros2_sdk.git
+
+[submodule "src/librealsense"]
+	path = src/librealsense
+	url = https://github.com/IntelRealSense/librealsense.git
+
+[submodule "src/stale/cfpa2-collaborative-exploration"]
+	path = src/stale/cfpa2-collaborative-exploration
+	url = https://github.com/ylhaichen/cfpa2-collaborative-exploration.git
