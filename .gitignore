@@ -63,6 +63,7 @@ tools/slam/reconstruct_scene/build/
 tools/slam/scan_editor
 
 *.tex
+qrc_report_and_agenda.md
 
 # Ignore large Isaac Sim USD models for LFS
 /src/stale/go2_issac_stack/assets/

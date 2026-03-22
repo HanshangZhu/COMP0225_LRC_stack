@@ -8,7 +8,10 @@
 #        ./go2w_ethernet_start.sh fastlio      # setup + launch Fast-LIO SLAM
 #        ./go2w_ethernet_start.sh fastlio_sam  # Fast-LIO + SC-PGO loop closure
 #        ./go2w_ethernet_start.sh cartographer # Cartographer 3D SLAM only
-#        ./go2w_ethernet_start.sh autonomy     # Cartographer + CFPA2 exploration + reactive_nav
+#        ./go2w_ethernet_start.sh autonomy     # Cartographer + CFPA2 + reactive_nav (scan mapper)
+#        ./go2w_ethernet_start.sh autonomy octomap    # Same but with Octomap 3D→2D grid
+#        ./go2w_ethernet_start.sh autonomy elevation  # Same but with traversability grid
+#        ./go2w_ethernet_start.sh mapping      # Carto + Octomap + frontiers, NO controller
 #
 # Prerequisites:
 #   - USB-C ethernet dongle plugged in (ASIX AX88179)
@@ -515,18 +518,200 @@ if [[ "${1:-}" == "cartographer" ]]; then
     -p publish_period_sec:=1.0 &
   GRID_PID=$!
 
-  # 3) Launch RViz
+  # 3) Launch RViz — 3D cloud view (left) + occupancy grid view (right)
   RVIZ_CFG="$REPO_ROOT/src/go2_real_bringup/config/cartographer/cartographer.rviz"
+  RVIZ_GRID_CFG="$REPO_ROOT/src/go2_real_bringup/config/cartographer/cartographer_grid.rviz"
+  echo "  Launching RViz (3D cloud + occupancy grid)..."
+  rviz2 -d "$RVIZ_CFG" &
+  RVIZ_PID=$!
+  rviz2 -d "$RVIZ_GRID_CFG" &
+  RVIZ_GRID_PID=$!
+  trap "kill $TE_PID $CARTO_PID $GRID_PID $RVIZ_PID $RVIZ_GRID_PID 2>/dev/null; echo ''; echo 'Stopped.'; exit 0" INT TERM
+  wait $CARTO_PID
+  exit 0
+fi
+
+# Half-auto mapping mode — Carto SLAM + Octomap + frontier detection, NO controller
+# Manually drive the robot while it builds the map and visualizes frontiers
+# Usage: ./go2w_ethernet_start.sh mapping
+if [[ "${1:-}" == "mapping" ]]; then
+  echo "  Verifying /utlidar/cloud and /utlidar/imu..."
+  PC_PUB=$(timeout 5 ros2 topic info /utlidar/cloud 2>/dev/null | grep -o 'Publisher count: [0-9]*' || echo "Publisher count: 0")
+  IMU_PUB=$(timeout 5 ros2 topic info /utlidar/imu 2>/dev/null | grep -o 'Publisher count: [0-9]*' || echo "Publisher count: 0")
+  echo "  /utlidar/cloud: $PC_PUB"
+  echo "  /utlidar/imu:   $IMU_PUB"
+  echo ""
+  echo "################################################"
+  echo "  Launching MAPPING (half-auto — no controller)"
+  echo "  Pipeline:"
+  echo "    /utlidar/{cloud,imu}"
+  echo "      → transform_everything"
+  echo "      → Cartographer 3D SLAM → TF"
+  echo "      → Octomap 3D (visualization)"
+  echo "      → pointcloud_to_laserscan → scan_mapper → /robot/map"
+  echo "      → frontier_3d_markers → /frontier_cylinders"
+  echo "  Drive the robot manually with the controller."
+  echo "  Ctrl+C to stop"
+  echo "################################################"
+  echo ""
+
+  # Kill stale processes
+  echo "  Cleaning up stale processes..."
+  pkill -9 -f cartographer_node 2>/dev/null || true
+  pkill -9 -f cartographer_occupancy 2>/dev/null || true
+  pkill -9 -f transform_everything 2>/dev/null || true
+  pkill -9 -f octomap_server 2>/dev/null || true
+  pkill -9 -f cfpa2 2>/dev/null || true
+  pkill -9 -f carto_odom_bridge 2>/dev/null || true
+  pkill -9 -f pointcloud_to_laserscan 2>/dev/null || true
+  pkill -9 -f simple_scan_mapper 2>/dev/null || true
+  pkill -9 -f frontier_3d_markers 2>/dev/null || true
+  killall -9 rviz2 2>/dev/null || true
+  ros2 daemon stop 2>/dev/null || true
+  sleep 1
+
+  # 0) transform_everything
+  echo "  Starting transform_everything..."
+  ros2 run transform_sensors transform_everything &
+  TE_PID=$!
+  sleep 2
+
+  # 1) Cartographer 3D SLAM
+  CARTO_CFG="$REPO_ROOT/src/go2_real_bringup/config/cartographer"
+  echo "  Starting Cartographer 3D..."
+  ros2 run cartographer_ros cartographer_node \
+    -configuration_directory "$CARTO_CFG" \
+    -configuration_basename go2w_3d_mapping.lua \
+    --ros-args \
+    -r points2:=/utlidar/transformed_cloud \
+    -r imu:=/utlidar/transformed_raw_imu \
+    -p use_sim_time:=false &
+  CARTO_PID=$!
+  sleep 3
+
+  # 2) Cartographer occupancy grid (native /map — keeps running as reference)
+  echo "  Starting Cartographer occupancy grid..."
+  ros2 run cartographer_ros cartographer_occupancy_grid_node \
+    --ros-args \
+    -p use_sim_time:=false \
+    -p resolution:=0.05 \
+    -p publish_period_sec:=1.0 &
+  CGRID_PID=$!
+
+  # 3) Static TF: body → base_link (identity)
+  ros2 run tf2_ros static_transform_publisher \
+    --frame-id body --child-frame-id base_link \
+    --x 0 --y 0 --z 0 --qx 0 --qy 0 --qz 0 --qw 1 \
+    --ros-args -p use_sim_time:=false &
+  STATIC_TF_PID=$!
+
+  # 4) Carto odom bridge (TF map→body → /robot/odom/nav)
+  echo "  Starting carto_odom_bridge..."
+  ros2 run go2w_perception carto_odom_bridge.py \
+    --ros-args \
+    -r __ns:=/robot \
+    -p parent_frame:=map \
+    -p child_frame:=body \
+    -p output_topic:=/robot/odom/nav \
+    -p output_frame_id:=map \
+    -p output_child_frame_id:=base_link \
+    -p rate:=50.0 &
+  ODOM_PID=$!
+  sleep 1
+
+  # 5) Octomap server (3D voxels — for visualization only, /robot/map is broken)
+  OCTO_CFG="$REPO_ROOT/src/go2_real_bringup/config/cartographer/octomap_mapping.yaml"
+  echo "  Starting Octomap server..."
+  ros2 run octomap_server octomap_server_node \
+    --ros-args \
+    --params-file "$OCTO_CFG" \
+    -r cloud_in:=/utlidar/transformed_cloud \
+    -r projected_map:=/octomap/projected_map &
+  OCTO_PID=$!
+
+  # 6) PointCloud → LaserScan (feeds scan mapper for proper 2D raycasting)
+  echo "  Starting pointcloud_to_laserscan..."
+  ros2 run pointcloud_to_laserscan pointcloud_to_laserscan_node \
+    --ros-args \
+    -r __ns:=/robot \
+    -r cloud_in:=/utlidar/transformed_cloud \
+    -r scan:=/robot/scan_3d \
+    -p use_sim_time:=false \
+    -p target_frame:=base_link \
+    -p transform_tolerance:=0.3 \
+    -p min_height:=-0.25 \
+    -p max_height:=0.60 \
+    -p angle_min:=-3.14159 \
+    -p angle_max:=3.14159 \
+    -p angle_increment:=0.006135923151543 \
+    -p range_min:=0.10 \
+    -p range_max:=8.0 \
+    -p use_inf:=true &
+  SCAN_PID=$!
+  sleep 1
+
+  # 7) Scan-based 2D mapper (proper raycasting → clear free/occupied/unknown)
+  #    Produces /robot/map with value 0=free, 100=occupied, -1=unknown
+  SCANMAP_CFG="$REPO_ROOT/src/go2_gazebo_sim/config/nav/simple_scan_mapper_single_go2w.yaml"
+  echo "  Starting simple_scan_mapper_cpp..."
+  ros2 run go2_nav_algorithms simple_scan_mapper_cpp \
+    --ros-args \
+    -r __ns:=/robot \
+    --params-file "$SCANMAP_CFG" \
+    -p scan_topic:=/robot/scan_3d \
+    -p odom_topic:=/robot/odom/nav \
+    -p map_topic:=/robot/map \
+    -p map_frame:=map \
+    -p broadcast_tf:=false &
+  SCANMAP_PID=$!
+  sleep 1
+
+  # 8) Frontier detector — subscribes to /robot/map (scan mapper with proper
+  #    free-space raycasting), publishes vertical cylinder markers.
+  echo "  Starting frontier_3d_markers (on scan mapper /robot/map)..."
+  ros2 run go2w_perception frontier_3d_markers.py \
+    --ros-args \
+    -p map_topic:=/robot/map \
+    -p marker_topic:=/frontier_cylinders \
+    -p frame_id:=map \
+    -p free_threshold:=0 \
+    -p occ_threshold:=50 \
+    -p frontier_stride:=2 \
+    -p min_cluster_area_m2:=0.5 \
+    -p obstacle_clearance_m:=0.30 \
+    -p max_frontiers:=180 \
+    -p cylinder_height:=0.8 \
+    -p cylinder_radius:=0.12 \
+    -p cylinder_z_base:=0.0 \
+    -p color_r:=0.0 \
+    -p color_g:=1.0 \
+    -p color_b:=0.3 \
+    -p color_a:=0.75 &
+  FRONTIER_PID=$!
+  sleep 1
+
+  # 9) RViz — octomap view (3D voxels + 2D grid + frontier cylinders)
+  RVIZ_CFG="$REPO_ROOT/src/go2_real_bringup/config/cartographer/octomap.rviz"
   echo "  Launching RViz..."
   rviz2 -d "$RVIZ_CFG" &
   RVIZ_PID=$!
-  trap "kill $TE_PID $CARTO_PID $GRID_PID $RVIZ_PID 2>/dev/null; echo ''; echo 'Stopped.'; exit 0" INT TERM
+
+  echo ""
+  echo "  ✅ Mapping mode running (no controller)"
+  echo "     Drive the robot with the physical controller"
+  echo "     Frontiers shown as green cylinders in RViz (/frontier_cylinders)"
+  echo "     Ctrl+C to stop everything"
+  echo ""
+
+  trap "kill $TE_PID $CARTO_PID $CGRID_PID $STATIC_TF_PID $ODOM_PID $OCTO_PID $SCAN_PID $SCANMAP_PID $FRONTIER_PID $RVIZ_PID 2>/dev/null; echo ''; echo 'Stopped.'; exit 0" INT TERM
   wait $CARTO_PID
   exit 0
 fi
 
 # Full autonomy mode — Cartographer SLAM + CFPA2 exploration + reactive navigation
+# Usage: ./go2w_ethernet_start.sh autonomy [scan|octomap|elevation]
 if [[ "${1:-}" == "autonomy" ]]; then
+  MAPPER_TYPE="${2:-scan}"  # default: scan (simple_scan_mapper_cpp)
   echo "  Verifying /utlidar/cloud and /utlidar/imu..."
   PC_PUB=$(timeout 5 ros2 topic info /utlidar/cloud 2>/dev/null | grep -o 'Publisher count: [0-9]*' || echo "Publisher count: 0")
   IMU_PUB=$(timeout 5 ros2 topic info /utlidar/imu 2>/dev/null | grep -o 'Publisher count: [0-9]*' || echo "Publisher count: 0")
@@ -535,13 +720,31 @@ if [[ "${1:-}" == "autonomy" ]]; then
   echo ""
   echo "################################################"
   echo "  Launching FULL AUTONOMY"
+  echo "  Mapper: $MAPPER_TYPE"
   echo "  Pipeline:"
   echo "    /utlidar/{cloud,imu}"
   echo "      → transform_everything (15.1° pitch + axis flip)"
   echo "      → Cartographer 3D SLAM → /map + TF"
-  echo "      → carto_odom_bridge → /robot/odom/nav"
+  case "$MAPPER_TYPE" in
+    scan)
+      echo "      → pointcloud_to_laserscan → simple_scan_mapper → /robot/map"
+      ;;
+    octomap)
+      echo "      → octomap_server (3D voxels → 2D projection) → /robot/map"
+      ;;
+    elevation)
+      echo "      → grid_map elevation → traversability → /robot/map"
+      ;;
+    *)
+      echo "  ERROR: Unknown mapper type '$MAPPER_TYPE'"
+      echo "  Valid options: scan, octomap, elevation"
+      exit 1
+      ;;
+  esac
   echo "      → CFPA2 frontier exploration → waypoints"
   echo "      → reactive_nav (A* + local avoid) → /cmd_vel"
+  echo "      → Unitree obstacle avoidance API (api_id=1003)"
+  echo "      → frontier_3d_markers → /frontier_cylinders (RViz)"
   echo "  Ctrl+C to stop"
   echo "################################################"
   echo ""
@@ -556,6 +759,11 @@ if [[ "${1:-}" == "autonomy" ]]; then
   pkill -9 -f carto_odom_bridge 2>/dev/null || true
   pkill -9 -f twist_bridge 2>/dev/null || true
   pkill -9 -f cmd_vel_activity_mux 2>/dev/null || true
+  pkill -9 -f octomap_server 2>/dev/null || true
+  pkill -9 -f elevation_to_occupancy 2>/dev/null || true
+  pkill -9 -f simple_scan_mapper 2>/dev/null || true
+  pkill -9 -f frontier_3d_markers 2>/dev/null || true
+  pkill -9 -f cmd_vel_to_sport 2>/dev/null || true
   killall -9 rviz2 2>/dev/null || true
   ros2 daemon stop 2>/dev/null || true
   sleep 1
@@ -579,8 +787,8 @@ if [[ "${1:-}" == "autonomy" ]]; then
   CARTO_PID=$!
   sleep 3
 
-  # 2) Occupancy grid
-  echo "  Starting occupancy grid publisher..."
+  # 2) Occupancy grid (Cartographer's native /map — used as reference/fallback)
+  echo "  Starting Cartographer occupancy grid publisher..."
   ros2 run cartographer_ros cartographer_occupancy_grid_node \
     --ros-args \
     -p use_sim_time:=false \
@@ -589,27 +797,108 @@ if [[ "${1:-}" == "autonomy" ]]; then
   GRID_PID=$!
   sleep 2
 
-  # 3) Full navigation stack
-  echo "  Launching navigation stack (CFPA2 + reactive_nav)..."
+  # 3) Launch mapper-specific nodes
+  MAPPER_PIDS=""
+  EXTERNAL_MAPPER="false"
+
+  case "$MAPPER_TYPE" in
+    scan)
+      # Default: simple_scan_mapper launched inside the nav launch file
+      echo "  Mapper: simple_scan_mapper_cpp (internal to launch file)"
+      EXTERNAL_MAPPER="false"
+      ;;
+
+    octomap)
+      # Octomap: 3D voxel map → 2D projected occupancy grid
+      EXTERNAL_MAPPER="true"
+      OCTO_CFG="$REPO_ROOT/src/go2_real_bringup/config/cartographer/octomap_mapping.yaml"
+      echo "  Starting Octomap server..."
+      ros2 run octomap_server octomap_server_node \
+        --ros-args \
+        --params-file "$OCTO_CFG" \
+        -r cloud_in:=/utlidar/transformed_cloud \
+        -r projected_map:=/robot/map &
+      MAPPER_PIDS="$!"
+      echo "  Octomap server PID: $MAPPER_PIDS"
+      ;;
+
+    elevation)
+      # Grid map elevation → traversability → OccupancyGrid
+      EXTERNAL_MAPPER="true"
+      # For now, use octomap for the 3D representation and elevation bridge for traversability
+      OCTO_CFG="$REPO_ROOT/src/go2_real_bringup/config/cartographer/octomap_mapping.yaml"
+      echo "  Starting Octomap server (for 3D representation)..."
+      ros2 run octomap_server octomap_server_node \
+        --ros-args \
+        --params-file "$OCTO_CFG" \
+        -r cloud_in:=/utlidar/transformed_cloud &
+      OCTO_PID=$!
+      sleep 2
+
+      echo "  Starting elevation→occupancy bridge..."
+      python3 "$REPO_ROOT/src/go2w_perception/scripts/elevation_to_occupancy.py" \
+        --ros-args \
+        -p input_topic:=/robot/elevation_map \
+        -p output_topic:=/robot/map \
+        -p frame_id:=map \
+        -p max_step_height:=0.08 \
+        -p max_slope_rad:=0.35 &
+      ELEV_PID=$!
+      MAPPER_PIDS="$OCTO_PID $ELEV_PID"
+      echo "  Elevation mapper PIDs: $MAPPER_PIDS"
+      ;;
+  esac
+  sleep 1
+
+  # 4) Octomap server (3D visualization only)
+  OCTO_CFG="$REPO_ROOT/src/go2_real_bringup/config/cartographer/octomap_mapping.yaml"
+  echo "  Starting Octomap server (3D visualization)..."
+  ros2 run octomap_server octomap_server_node \
+    --ros-args \
+    --params-file "$OCTO_CFG" \
+    -r cloud_in:=/utlidar/transformed_cloud \
+    -r projected_map:=/octomap/projected_map &
+  OCTO_PID=$!
+
+  # 5) Full navigation stack (CFPA2 + reactive_nav + Unitree obstacle avoidance)
+  echo "  Launching navigation stack (CFPA2 + reactive_nav + obstacle_avoidance)..."
   ros2 launch go2_real_bringup single_go2w_real_cfpa2.launch.py \
     robot_namespace:=robot \
-    enable_manual_fallback:=true &
+    enable_manual_fallback:=true \
+    external_mapper:=$EXTERNAL_MAPPER \
+    obstacle_avoidance:=true &
   NAV_PID=$!
   sleep 2
 
-  # 4) RViz — autonomy view (grid, frontiers, planned path, robot pose)
-  RVIZ_CFG="$REPO_ROOT/src/go2_real_bringup/config/cartographer/autonomy.rviz"
+  # 6) Frontier detector (subscribes to /robot/map from scan mapper inside launch)
+  echo "  Starting frontier_3d_markers..."
+  ros2 run go2w_perception frontier_3d_markers.py \
+    --ros-args \
+    -p map_topic:=/robot/map \
+    -p marker_topic:=/frontier_cylinders \
+    -p frame_id:=map \
+    -p free_threshold:=0 \
+    -p occ_threshold:=50 \
+    -p obstacle_clearance_m:=0.30 \
+    -p cylinder_height:=0.8 \
+    -p cylinder_radius:=0.12 &
+  FRONTIER_PID=$!
+
+  # 7) RViz — octomap 3D view + scan mapper 2D grid + frontier cylinders
+  RVIZ_CFG="$REPO_ROOT/src/go2_real_bringup/config/cartographer/octomap.rviz"
   echo "  Launching RViz..."
   rviz2 -d "$RVIZ_CFG" &
   RVIZ_PID=$!
 
   echo ""
-  echo "  ✅ Full autonomy stack running"
+  echo "  ✅ Full autonomy stack running (mapper=$MAPPER_TYPE)"
+  echo "     Unitree obstacle avoidance: ENABLED (api_id=1003)"
+  echo "     Frontiers shown as green cylinders in RViz"
   echo "     Manual override: use joystick"
   echo "     Ctrl+C to stop everything"
   echo ""
 
-  trap "kill $TE_PID $CARTO_PID $GRID_PID $NAV_PID $RVIZ_PID 2>/dev/null; echo ''; echo 'Stopped.'; exit 0" INT TERM
+  trap "kill $TE_PID $CARTO_PID $GRID_PID $OCTO_PID $NAV_PID $FRONTIER_PID $RVIZ_PID $MAPPER_PIDS 2>/dev/null; echo ''; echo 'Stopped.'; exit 0" INT TERM
   wait $CARTO_PID
   exit 0
 fi

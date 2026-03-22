@@ -19,18 +19,35 @@ import os
 class Repuber(Node):
     def __init__(self):
         super().__init__('sensor_transformer')
+
+        # --- Accel low-pass filter (XYZ only, no gyro) ---
+        # EMA filter: out = alpha * new + (1-alpha) * prev
+        # alpha=0.15 → heavy smoothing, alpha=1.0 → no filtering
+        # To disable:  ros2 run transform_sensors transform_everything \
+        #                --ros-args -p accel_lpf_enabled:=false
+        self.declare_parameter('accel_lpf_enabled', True)
+        self.declare_parameter('accel_lpf_alpha', 0.15)  # 0→max smooth, 1→no filter
+
+        self.accel_lpf_enabled = self.get_parameter('accel_lpf_enabled').value
+        self.accel_lpf_alpha = float(self.get_parameter('accel_lpf_alpha').value)
+        self.accel_lpf_state = None  # (x, y, z) or None until first sample
+
+        if self.accel_lpf_enabled:
+            self.get_logger().info(
+                f'Accel low-pass filter ON (alpha={self.accel_lpf_alpha})')
+
         self.imu_sub = self.create_subscription(Imu, '/utlidar/imu', self.imu_callback, 50)
         self.cloud_sub = self.create_subscription(PointCloud2, '/utlidar/cloud', self.cloud_callback, 50)
-        
+
         self.imu_raw_pub = self.create_publisher(Imu, '/utlidar/transformed_raw_imu', 50)
         self.imu_pub = self.create_publisher(Imu, '/utlidar/transformed_imu', 50)
         self.cloud_pub = self.create_publisher(PointCloud2, '/utlidar/transformed_cloud', 50)
 
         self.imu_stationary_list = []
-        
+
         self.time_stamp_offset = 0
         self.time_stamp_offset_set = False
-        
+
         self.cam_offset = 0.046825
 
         # Load calibration data
@@ -204,11 +221,26 @@ class Repuber(Node):
         acc_x2 = np.cos(theta) * acc_x - np.sin(theta) * acc_z
         acc_y2 = acc_y
         acc_z2 = np.sin(theta) * acc_x + np.cos(theta) * acc_z
+        ax_out = acc_x2 - self.acc_bias_x
+        ay_out = acc_y2 - self.acc_bias_y
+        az_out = acc_z2 - self.acc_bias_z
+
+        # Optional EMA low-pass filter on linear acceleration (no gyro)
+        if self.accel_lpf_enabled:
+            a = self.accel_lpf_alpha
+            if self.accel_lpf_state is None:
+                self.accel_lpf_state = (ax_out, ay_out, az_out)
+            else:
+                sx, sy, sz = self.accel_lpf_state
+                ax_out = a * ax_out + (1.0 - a) * sx
+                ay_out = a * ay_out + (1.0 - a) * sy
+                az_out = a * az_out + (1.0 - a) * sz
+                self.accel_lpf_state = (ax_out, ay_out, az_out)
+
         transformed_linear_acceleration = Vector3()
-        transformed_linear_acceleration.x = acc_x2 - self.acc_bias_x
-        transformed_linear_acceleration.y = acc_y2 - self.acc_bias_y
-        transformed_linear_acceleration.z = acc_z2 - self.acc_bias_z
-        
+        transformed_linear_acceleration.x = ax_out
+        transformed_linear_acceleration.y = ay_out
+        transformed_linear_acceleration.z = az_out
 
         transformed_imu = Imu()
         transformed_imu.header.stamp = data.header.stamp

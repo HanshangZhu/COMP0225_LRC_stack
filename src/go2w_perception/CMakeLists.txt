@@ -15,6 +15,7 @@ install(PROGRAMS
   scripts/slam_odom_relay.py
   scripts/temporal_scan_filter.py
   scripts/carto_odom_bridge.py
+  scripts/frontier_3d_markers.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

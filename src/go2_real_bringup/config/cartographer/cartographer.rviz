@@ -136,14 +136,47 @@ Visualization Manager:
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
-      Name: Current View
+      Name: Top-Down 2D
       Near Clip Distance: 0.01
       Scale: 20
       Target Frame: body
       Value: TopDownOrtho (rviz_default_plugins)
       X: 0
       Y: 0
-    Saved: ~
+    Saved:
+      - Class: rviz_default_plugins/Orbit
+        Distance: 12
+        Enable Stereo Rendering:
+          Stereo Eye Separation: 0.06
+          Stereo Focal Distance: 1
+          Swap Stereo Eyes: false
+          Value: false
+        Focal Point:
+          X: 0
+          Y: 0
+          Z: 0
+        Focal Shape Fixed Size: true
+        Focal Shape Size: 0.05
+        Invert Z Axis: false
+        Name: 3D Orbit
+        Near Clip Distance: 0.01
+        Pitch: 0.5
+        Target Frame: body
+        Value: Orbit (rviz_default_plugins)
+        Yaw: 0.8
+      - Class: rviz_default_plugins/TopDownOrtho
+        Enable Stereo Rendering:
+          Stereo Eye Separation: 0.06
+          Stereo Focal Distance: 1
+          Swap Stereo Eyes: false
+          Value: false
+        Name: Top-Down 2D
+        Near Clip Distance: 0.01
+        Scale: 20
+        Target Frame: body
+        Value: TopDownOrtho (rviz_default_plugins)
+        X: 0
+        Y: 0
 Window Geometry:
   Displays:
     collapsed: false

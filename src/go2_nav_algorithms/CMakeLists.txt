@@ -19,6 +19,12 @@ ament_target_dependencies(simple_scan_mapper_cpp
   tf2_ros
 )
 
+add_executable(scan_rear_filter src/scan_rear_filter.cpp)
+ament_target_dependencies(scan_rear_filter
+  rclcpp
+  sensor_msgs
+)
+
 install(DIRECTORY
   config
   docs
@@ -28,6 +34,7 @@ install(DIRECTORY
 
 install(TARGETS
   simple_scan_mapper_cpp
+  scan_rear_filter
   DESTINATION lib/${PROJECT_NAME}
 )
 

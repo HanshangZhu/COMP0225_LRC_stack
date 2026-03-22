@@ -37,6 +37,12 @@ def _get(context, name: str) -> str:
 def _launch_setup(context):
     robot_ns = _get(context, "robot_namespace").strip().strip("/") or "robot"
     enable_manual_fallback = _as_bool(_get(context, "enable_manual_fallback"))
+    external_mapper = _as_bool(_get(context, "external_mapper"))
+    waypoint_input_suffix = _get(context, "waypoint_input_suffix").strip()
+    if not waypoint_input_suffix:
+        waypoint_input_suffix = "/way_point_coord"
+    if not waypoint_input_suffix.startswith("/"):
+        waypoint_input_suffix = "/" + waypoint_input_suffix
 
     go2w_control_pkg = get_package_share_directory("go2w_control")
     cfpa2_pkg = get_package_share_directory("cfpa2_collaborative_autonomy")
@@ -84,7 +90,7 @@ def _launch_setup(context):
         )
     )
 
-    # ── PointCloud → LaserScan (for reactive_nav local avoidance) ──
+    # ── PointCloud → LaserScan (always needed for reactive_nav local avoidance) ──
     actions.append(
         Node(
             package="pointcloud_to_laserscan",
@@ -96,7 +102,7 @@ def _launch_setup(context):
                     "use_sim_time": False,
                     "target_frame": "base_link",
                     "transform_tolerance": 0.3,
-                    "min_height": 0.05,
+                    "min_height": -0.25,
                     "max_height": 0.60,
                     "angle_min": -3.14159,
                     "angle_max": 3.14159,
@@ -109,41 +115,58 @@ def _launch_setup(context):
             ],
             remappings=[
                 ("cloud_in", "/utlidar/transformed_cloud"),
-                ("scan", f"/{robot_ns}/scan_3d"),
+                ("scan", f"/{robot_ns}/scan_3d_raw"),
             ],
             output="screen",
         )
     )
 
-    # ── 2D Occupancy Grid Mapper (ray-traced free cells for frontier detection) ──
-    # Cartographer's 3D occupancy grid is an x-ray projection with zero free cells.
-    # simple_scan_mapper_cpp builds a proper 2D grid from LaserScan + TF.
-    nav_pkg = get_package_share_directory("go2_nav_algorithms")
-    go2_gazebo_pkg = get_package_share_directory("go2_gazebo_sim")
-    mapper_profile = os.path.join(go2_gazebo_pkg, "config", "nav", "simple_scan_mapper_single_go2w.yaml")
+    # ── Rear self-hit filter (blank robot body hits in rear half) ──
     actions.append(
         Node(
             package="go2_nav_algorithms",
-            executable="simple_scan_mapper_cpp",
+            executable="scan_rear_filter",
             namespace=robot_ns,
-            name="simple_scan_mapper_cpp",
-            parameters=[
-                os.path.join(nav_pkg, "config", "nav", "geometric_frontier_single.yaml"),
-                mapper_profile,
-                {
-                    "use_sim_time": False,
-                    "scan_topic": f"/{robot_ns}/scan_3d",
-                    "odom_topic": f"/{robot_ns}/odom/nav",
-                    "map_topic": f"/{robot_ns}/map",
-                    "map_frame": "map",
-                    "broadcast_tf": False,  # Cartographer provides TF; don't conflict
-                    "startup_delay": 0.0,
-                    "scan_frame": "base_link",
-                },
+            name="scan_rear_filter",
+            parameters=[{"rear_blank_radius": 0.45}],
+            remappings=[
+                ("scan_in", f"/{robot_ns}/scan_3d_raw"),
+                ("scan_out", f"/{robot_ns}/scan_3d"),
             ],
             output="screen",
         )
     )
+
+    # ── 2D Occupancy Grid Mapper (skipped when external_mapper=true) ──
+    if not external_mapper:
+      # Cartographer's 3D occupancy grid is an x-ray projection with zero free cells.
+      # simple_scan_mapper_cpp builds a proper 2D grid from LaserScan + TF.
+      nav_pkg = get_package_share_directory("go2_nav_algorithms")
+      go2_gazebo_pkg = get_package_share_directory("go2_gazebo_sim")
+      mapper_profile = os.path.join(go2_gazebo_pkg, "config", "nav", "simple_scan_mapper_single_go2w.yaml")
+      actions.append(
+          Node(
+              package="go2_nav_algorithms",
+              executable="simple_scan_mapper_cpp",
+              namespace=robot_ns,
+              name="simple_scan_mapper_cpp",
+              parameters=[
+                  os.path.join(nav_pkg, "config", "nav", "geometric_frontier_single.yaml"),
+                  mapper_profile,
+                  {
+                      "use_sim_time": False,
+                      "scan_topic": f"/{robot_ns}/scan_3d",
+                      "odom_topic": f"/{robot_ns}/odom/nav",
+                      "map_topic": f"/{robot_ns}/map",
+                      "map_frame": "map",
+                      "broadcast_tf": False,  # Cartographer provides TF; don't conflict
+                      "startup_delay": 0.0,
+                      "scan_frame": "base_link",
+                  },
+              ],
+              output="screen",
+          )
+      )
 
     # ── CFPA2 Frontier Exploration (weights match demo.sh) ──
     actions.append(
@@ -158,6 +181,7 @@ def _launch_setup(context):
                     "namespaces": [robot_ns],
                     "goal_topic_suffix": "/way_point_coord",
                     "marker_frame_override": "map",
+                    "switch_hysteresis": 0.06,
                     # demo.sh weights
                     "cfpa2_w_ig": 0.5,
                     "cfpa2_w_c": 0.8,
@@ -182,7 +206,7 @@ def _launch_setup(context):
                 {"use_sim_time": False},
                 {
                     # Real-robot overrides
-                    "max_linear_speed": 0.15,  # Start conservative, increase after testing
+                    "max_linear_speed": 0.30,  # 2x gait speed vs prior default
                     "require_settle_before_motion": False,  # Carto pose jitter defeats settle gate
                     "frontier_replan_topic": f"/{robot_ns}/frontier_replan",
                     "stop_topic": f"/{robot_ns}/stop",
@@ -191,7 +215,7 @@ def _launch_setup(context):
                 },
             ],
             remappings=[
-                ("/way_point", f"/{robot_ns}/way_point_coord"),
+                ("/way_point", f"/{robot_ns}{waypoint_input_suffix}"),
                 ("/odom/ground_truth", f"/{robot_ns}/odom/nav"),
                 ("/scan", f"/{robot_ns}/scan_3d"),
                 ("/cmd_vel_stamped", f"/{robot_ns}/cmd_vel_stamped"),
@@ -212,8 +236,8 @@ def _launch_setup(context):
             namespace=robot_ns,
             name="twist_bridge",
             remappings=[
-                ("/cmd_vel_stamped", f"/{robot_ns}/cmd_vel_stamped"),
-                ("/cmd_vel", f"/{robot_ns}/cmd_vel_auto"),
+                ("cmd_vel_stamped", f"/{robot_ns}/cmd_vel_stamped"),
+                ("cmd_vel", f"/{robot_ns}/cmd_vel_auto"),
             ],
             output="screen",
         )
@@ -244,6 +268,9 @@ def _launch_setup(context):
     )
 
     # ── cmd_vel → Sport API bridge (Go2 doesn't natively subscribe to /cmd_vel) ──
+    # When obstacle_avoidance=true, uses Unitree's built-in obstacle avoidance
+    # (api_id=1003 on /api/obstacles_avoid/request) instead of raw Move (api_id=1008).
+    use_obstacle_avoidance = _as_bool(_get(context, "obstacle_avoidance"))
     actions.append(
         Node(
             package="go2w_control",
@@ -252,6 +279,7 @@ def _launch_setup(context):
             parameters=[
                 {"cmd_vel_topic": "/cmd_vel"},
                 {"sport_topic": "/api/sport/request"},
+                {"obstacle_avoidance": use_obstacle_avoidance},
             ],
             output="screen",
         )
@@ -296,6 +324,8 @@ def generate_launch_description() -> LaunchDescription:
     return LaunchDescription(
         [
             DeclareLaunchArgument("robot_namespace", default_value="robot"),
+            DeclareLaunchArgument("external_mapper", default_value="false"),
+            DeclareLaunchArgument("waypoint_input_suffix", default_value="/way_point_coord"),
             DeclareLaunchArgument("enable_manual_fallback", default_value="true"),
             DeclareLaunchArgument("joy_dev", default_value="/dev/input/js0"),
             DeclareLaunchArgument("joy_deadzone", default_value="0.12"),
@@ -304,6 +334,8 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument("auto_timeout_sec", default_value="0.60"),
             DeclareLaunchArgument("manual_linear_threshold", default_value="0.02"),
             DeclareLaunchArgument("manual_angular_threshold", default_value="0.05"),
+            DeclareLaunchArgument("obstacle_avoidance", default_value="true",
+                                 description="Use Unitree built-in obstacle avoidance (api_id=1003)"),
             OpaqueFunction(function=_launch_setup),
         ]
     )

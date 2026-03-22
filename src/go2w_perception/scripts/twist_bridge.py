@@ -13,22 +13,26 @@ class TwistBridge(Node):
         super().__init__('twist_bridge')
         
         # Subscribe to TwistStamped from pathFollower
+        # Use relative names so ROS 2 remapping works (launch file remaps these)
         self.sub = self.create_subscription(
             TwistStamped,
-            '/cmd_vel_stamped',
+            'cmd_vel_stamped',
             self.twist_callback,
             10
         )
         
         # Publish Twist to the topic the controller expects.
-        # Gazebo controller subscribes to /cmd_vel.
+        # Use relative name — launch file remaps to the correct output topic.
         self.pub = self.create_publisher(
             Twist,
-            '/cmd_vel',
+            'cmd_vel',
             10
         )
         
-        self.get_logger().info('Twist Bridge started: /cmd_vel_stamped -> /cmd_vel')
+        # Resolve the actual topic names after remapping for the log message
+        sub_topic = self.sub.topic_name
+        pub_topic = self.pub.topic_name
+        self.get_logger().info(f'Twist Bridge started: {sub_topic} -> {pub_topic}')
         
     def twist_callback(self, msg: TwistStamped):
         twist = Twist()

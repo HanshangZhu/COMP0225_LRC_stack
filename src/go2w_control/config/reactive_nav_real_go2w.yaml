@@ -14,7 +14,7 @@
     obstacle_slow_dist: 1.00
     obstacle_stop_dist: 0.45
     front_half_angle_deg: 55.0
-    side_check_angle_deg: 75.0
+    side_check_angle_deg: 90.0
     avoidance_gain: 1.05
     avoidance_deadband: 0.04
     avoidance_max_ratio: 0.30
@@ -30,7 +30,7 @@
     planner_invalid_replan_count: 2
     planner_grid_radius: 4.5
     planner_resolution: 0.10
-    planner_inflation_radius: 0.40
+    planner_inflation_radius: 0.60
     planner_goal_clip_distance: 3.0
     planner_goal_search_radius: 1.6
     planner_start_clearance_radius: 0.30

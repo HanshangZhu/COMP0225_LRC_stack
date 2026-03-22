@@ -2,7 +2,7 @@
 # go2w_start_autonomy.sh
 # Full autonomy pipeline for Go2W: SLAM + frontier exploration + navigation + obstacle avoidance.
 #
-# Usage: ./go2w_start_autonomy.sh                    # default (scan mapper, OA enabled)
+# Usage: ./go2w_start_autonomy.sh                    # default (scan mapper, OA disabled)
 #        ./go2w_start_autonomy.sh scan false         # scan mapper, OA disabled (api_id=1008)
 #        ./go2w_start_autonomy.sh octomap true       # octomap mapper, OA enabled
 #        ./go2w_start_autonomy.sh elevation false    # elevation mapper, OA disabled
@@ -33,7 +33,11 @@ HOST_IP="${GO2W_HOST_IP:-192.168.123.100}"
 ETH_IFACE="${GO2W_ETH_IFACE:-enxc8a36240a4c7}"
 SUBNET="24"
 MAPPER_TYPE="${1:-scan}"
-OBSTACLE_AVOIDANCE="${2:-true}"
+OBSTACLE_AVOIDANCE="${2:-false}"
+NAV_LAUNCH_FILE="${GO2W_NAV_LAUNCH_FILE:-single_go2w_real_cfpa2.launch.py}"
+# Allow accidental "@/path" style copy-paste from IDE links.
+NAV_LAUNCH_FILE="${NAV_LAUNCH_FILE#@}"
+DEFAULT_NAV_LAUNCH_FILE="single_go2w_real_cfpa2.launch.py"
 
 # ── DDS config ─────────────────────────────────────────────────────
 setup_cyclonedds() {
@@ -136,6 +140,14 @@ echo "  Robot at $ROBOT_IP reachable ✅"
 echo ""
 echo "=== [3/4] Setting up CycloneDDS ==="
 setup_cyclonedds
+
+# Validate nav launch file after ROS env is sourced.
+PKG_PREFIX="$(ros2 pkg prefix go2_real_bringup 2>/dev/null || true)"
+if [[ -z "$PKG_PREFIX" || ! -f "$PKG_PREFIX/share/go2_real_bringup/launch/$NAV_LAUNCH_FILE" ]]; then
+  echo "WARN: nav launch '$NAV_LAUNCH_FILE' not found in go2_real_bringup install." >&2
+  echo "      Falling back to '$DEFAULT_NAV_LAUNCH_FILE'." >&2
+  NAV_LAUNCH_FILE="$DEFAULT_NAV_LAUNCH_FILE"
+fi
 
 # ── Verify topics ─────────────────────────────────────────────────
 echo ""
@@ -280,9 +292,9 @@ ros2 run octomap_server octomap_server_node \
 OCTO_PID=$!
 ALL_PIDS="$ALL_PIDS $OCTO_PID"
 
-# ── 6) Navigation stack (CFPA2 + reactive_nav + obstacle avoidance) ──
+# ── 6) Navigation stack (CFPA2/TARE + reactive_nav + obstacle avoidance) ──
 echo "  [6/7] Launching navigation stack..."
-ros2 launch go2_real_bringup single_go2w_real_cfpa2.launch.py \
+ros2 launch go2_real_bringup "$NAV_LAUNCH_FILE" \
   robot_namespace:=robot \
   enable_manual_fallback:=true \
   external_mapper:=$EXTERNAL_MAPPER \
@@ -315,6 +327,7 @@ ALL_PIDS="$ALL_PIDS $RVIZ_PID"
 echo ""
 echo "  ✅ Full autonomy stack running"
 echo "     Mapper: $MAPPER_TYPE"
+echo "     Nav launch: $NAV_LAUNCH_FILE"
 if [[ "$OBSTACLE_AVOIDANCE" == "true" ]]; then
   echo "     Obstacle avoidance: ENABLED (api_id=1003)"
 else
