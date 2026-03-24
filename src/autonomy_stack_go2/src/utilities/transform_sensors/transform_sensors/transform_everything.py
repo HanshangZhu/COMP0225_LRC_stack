@@ -36,6 +36,10 @@ class Repuber(Node):
             self.get_logger().info(
                 f'Accel low-pass filter ON (alpha={self.accel_lpf_alpha})')
 
+        # Per-robot frame id for dual-robot laptops (Cartographer tracking_frame must match).
+        self.declare_parameter('output_frame_id', 'body')
+        self.output_frame_id = str(self.get_parameter('output_frame_id').value).strip() or 'body'
+
         self.imu_sub = self.create_subscription(Imu, '/utlidar/imu', self.imu_callback, 50)
         self.cloud_sub = self.create_subscription(PointCloud2, '/utlidar/cloud', self.cloud_callback, 50)
 
@@ -112,8 +116,6 @@ class Repuber(Node):
         self.y_filter_max = 0.3
         self.z_filter_min = -0.6 - self.cam_offset
         self.z_filter_max = 0 - self.cam_offset
-
-        rclpy.spin(self)
                 
     def is_in_filter_box(self, point):
         # Check if the point is in the filter box
@@ -155,7 +157,7 @@ class Repuber(Node):
         
         elevated_cloud = pc2.create_cloud(data.header, data.fields, transformed_points)
         elevated_cloud.header.stamp = Time(nanoseconds=Time.from_msg(elevated_cloud.header.stamp).nanoseconds + self.time_stamp_offset).to_msg()
-        elevated_cloud.header.frame_id = "body"
+        elevated_cloud.header.frame_id = self.output_frame_id
         elevated_cloud.is_dense = data.is_dense
 
         self.cloud_pub.publish(elevated_cloud)
@@ -244,7 +246,7 @@ class Repuber(Node):
 
         transformed_imu = Imu()
         transformed_imu.header.stamp = data.header.stamp
-        transformed_imu.header.frame_id = 'body'
+        transformed_imu.header.frame_id = self.output_frame_id
         transformed_imu.orientation.x = transformed_orientation[0]
         transformed_imu.orientation.y = transformed_orientation[1]
         transformed_imu.orientation.z = transformed_orientation[2]
@@ -269,13 +271,14 @@ class Repuber(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-
     transform_node = Repuber()
-
-    rclpy.spin(transform_node)
-
-    Repuber.destroy_node()
-    rclpy.shutdown()
+    try:
+        rclpy.spin(transform_node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        transform_node.destroy_node()
+        rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

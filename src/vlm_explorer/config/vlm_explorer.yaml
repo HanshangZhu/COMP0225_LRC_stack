@@ -1,0 +1,54 @@
+/**:
+  ros__parameters:
+    # ── Robot namespaces ──
+    robot_namespaces: ["robot_a", "robot_b"]
+
+    # ── Skeleton extractor ──
+    skeleton_extractor:
+      map_topic: /world/map
+      skeleton_marker_topic: /vlm/skeleton_markers
+      skeleton_image_topic: /vlm/skeleton_image
+      frame_id: world
+      rate: 1.0
+      free_threshold: 50
+      downsample: 2
+
+    # ── Map renderer ──
+    map_renderer:
+      map_topic: /world/map
+      skeleton_image_topic: /vlm/skeleton_image
+      green_detections_topic: /vlm/green_detections
+      rendered_map_topic: /vlm/rendered_map
+      scene_json_topic: /vlm/scene_json
+      frame_id: world
+      rate: 1.0
+
+    # ── Green marker detector ──
+    green_marker_detector:
+      detections_topic: /vlm/green_detections
+      rate: 2.0
+      hsv_h_low: 35
+      hsv_h_high: 85
+      hsv_s_low: 80
+      hsv_v_low: 80
+      min_blob_pixels: 200
+      assumed_depth_m: 2.0
+      camera_hfov_rad: 2.0944
+      dedup_radius_m: 0.8
+
+    # ── VLM coordinator ──
+    vlm_coordinator:
+      rendered_map_topic: /vlm/rendered_map
+      scene_json_topic: /vlm/scene_json
+      green_detections_topic: /vlm/green_detections
+      goal_topic_suffix: /way_point_coord
+      frame_id: world
+      replan_period_sec: 20.0
+      vlm_enabled: true
+      vlm_provider: openai       # "openai" or "anthropic"
+      vlm_model: gpt-4o
+      vlm_temperature: 0.2
+      vlm_max_tokens: 1024
+      vlm_max_retries: 3
+      green_reach_radius_m: 1.0
+      fallback_hold_sec: 40.0
