@@ -25,7 +25,7 @@ Panels:
 Visualization Manager:
   Class: ""
   Displays:
-    - Alpha: 0.35
+    - Alpha: 0.15
       Cell Size: 1
       Class: rviz_default_plugins/Grid
       Color: 55; 89; 122
@@ -78,7 +78,7 @@ Visualization Manager:
       Update Interval: 0
       Value: true
       Visual Enabled: true
-    - Alpha: 0.55
+    - Alpha: 0.92
       Class: rviz_default_plugins/Map
       Color Scheme: map
       Draw Behind: false
@@ -95,20 +95,40 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /robot/map_updates
+        Value: ""
       Use Timestamp: false
       Value: true
+    - Alpha: 0.35
+      Class: rviz_default_plugins/Map
+      Color Scheme: map
+      Draw Behind: true
+      Enabled: false
+      Name: RawProbMap
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /robot/map_prob
+      Update Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: ""
+      Use Timestamp: false
+      Value: false
     - Alpha: 1
-      Autocompute Intensity Bounds: true
+      Autocompute Intensity Bounds: false
       Autocompute Value Bounds:
         Max Value: 10
         Min Value: -10
         Value: true
       Axis: Z
-      Channel Name: intensity
+      Channel Name: x
       Class: rviz_default_plugins/PointCloud2
-      Color: 255; 255; 255
-      Color Transformer: Intensity
+      Color: 30; 30; 30
+      Color Transformer: FlatColor
       Decay Time: 0
       Enabled: true
       Invert Rainbow: false
@@ -116,18 +136,18 @@ Visualization Manager:
       Max Intensity: 1
       Min Color: 0; 0; 0
       Min Intensity: 0
-      Name: RegisteredScan
+      Name: DeskewedCloud
       Position Transformer: XYZ
       Selectable: true
-      Size (Pixels): 3
-      Size (m): 0.05
-      Style: Flat Squares
+      Size (Pixels): 2
+      Size (m): 0.03
+      Style: Points
       Topic:
         Depth: 5
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /robot/registered_scan_reliable
+        Value: /robot/cloud_registered_body
       Use Fixed Frame: true
       Use rainbow: true
       Value: true
@@ -240,7 +260,7 @@ Visualization Manager:
         Value: /vlm/rendered_map
       Value: true
     - Class: rviz_default_plugins/MarkerArray
-      Enabled: true
+      Enabled: false
       Name: SkeletonMarkers
       Namespaces:
         "": true
@@ -254,7 +274,7 @@ Visualization Manager:
   Enabled: true
   Global Options:
     Background Color: 235; 237; 240
-    Fixed Frame: world
+    Fixed Frame: map
     Frame Rate: 30
   Name: root
   Tools:

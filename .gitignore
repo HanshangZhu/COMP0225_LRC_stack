@@ -52,6 +52,10 @@ imu_calib_data.yaml*
 /session_summary.md
 /walkthrough.md
 /assets_pipeline.lua
+/scripts/vlm_demo_v2.sh
+
+# Local cloned exploration module
+/src/cfpa2-rh-physics-exploration/
 
 # TTS cache
 /tts_cache/

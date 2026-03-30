@@ -29,7 +29,10 @@ setup(
             "skeleton_extractor_node = vlm_explorer.skeleton_extractor_node:main",
             "map_renderer_node = vlm_explorer.map_renderer_node:main",
             "green_marker_detector_node = vlm_explorer.green_marker_detector_node:main",
+            "artifact_detector_node = vlm_explorer.artifact_detector_node:main",
+            "interaction_tool_node = vlm_explorer.interaction_tool_node:main",
             "vlm_coordinator_node = vlm_explorer.vlm_coordinator_node:main",
+            "florence2_detector_node = vlm_explorer.florence2_detector_node:main",
         ],
     },
 )

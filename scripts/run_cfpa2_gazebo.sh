@@ -34,8 +34,8 @@ if [[ ! -f "${WS_DIR}/install/setup.bash" ]]; then
 fi
 safe_source "${WS_DIR}/install/setup.bash"
 
-export ROS_LOG_DIR="${ROS_LOG_DIR:-/tmp/ros_logs}"
-mkdir -p "${ROS_LOG_DIR}"
+safe_source "${WS_DIR}/scripts/common_logging.sh"
+setup_run_logging "cfpa2_gazebo"
 
 terminate_matching_processes() {
   local pattern="$1"
@@ -202,7 +202,7 @@ DEFAULT_LAUNCH_ARGS=(
   "pointlio_spawn_heading:=0.0"
 )
 
-exec ros2 launch go2_gazebo_sim dual_go2_modular.launch.py \
+run_pretty_logged ros2 launch go2_gazebo_sim dual_go2_modular.launch.py \
   "profile:=mtare_ros2" \
   "${DEFAULT_LAUNCH_ARGS[@]}" \
   "$@"

@@ -2,13 +2,21 @@
 -- Based on go2w_3d_mapping.lua but adapted for simulated sensor topics/frames
 --
 -- Sim sensor pipeline:
---   Gazebo IMU plugin  → /{ns}/imu/data       (frame: imu)
---   Gazebo LiDAR plugin → /{ns}/registered_scan (frame: livox_mid360)
+--   Gazebo IMU plugin  → /{ns}/imu/data          (frame: imu)
+--   Gazebo LiDAR plugin → /{ns}/registered_scan  (frame: livox_mid360)
 --   URDF TF chain: base_link → base → imu → livox_mid360
 --
--- Cartographer tracks 'imu' frame, uses URDF static TF to resolve livox_mid360.
--- Publishes TF: map → odom → imu
--- carto_odom_bridge converts TF(map→imu) to Odometry on /{ns}/odom/nav
+-- IMPORTANT:
+--   tracking_frame should remain the physical IMU sensor frame so Cartographer
+--   can consume IMU data correctly, but published_frame must be the robot body
+--   frame. Publishing on imu gives that sensor frame two parents:
+--     1. base → imu from robot_state_publisher
+--     2. odom → imu from Cartographer
+--   which breaks the TF tree and corrupts downstream pose consumers.
+--
+-- Cartographer therefore tracks 'imu' but publishes TF on 'base_link':
+--   map → odom → base_link → base → imu → livox_mid360
+-- carto_odom_bridge then converts TF(map→base_link) to /{ns}/odom/nav.
 
 include "map_builder.lua"
 include "trajectory_builder.lua"
@@ -18,7 +26,7 @@ options = {
   trajectory_builder = TRAJECTORY_BUILDER,
   map_frame = "map",
   tracking_frame = "imu",                 -- Gazebo IMU plugin publishes in imu frame
-  published_frame = "imu",
+  published_frame = "base_link",
   odom_frame = "odom",
   provide_odom_frame = true,
   publish_frame_projected_to_2d = false,

@@ -1,100 +1,31 @@
 #!/usr/bin/env python3
-"""VLM Coordinator: centralized VLM-in-the-loop waypoint assignment.
+"""Low-frequency VLM advisor for ROS2 exploration.
 
-Consumes rendered map image + scene JSON, constructs a hybrid prompt,
-queries a VLM (OpenAI GPT-4o or Anthropic Claude), parses the response, and publishes
-waypoint assignments for each robot.
-
-Placeholder agentic tool: print_green_reached — when a robot is within
-reach_radius of a detected green marker, the VLM can invoke this tool.
-
-Falls back to the existing CFPA2 coordinator when VLM is disabled or fails.
+This node is intentionally conservative:
+- the baseline explorer keeps producing goals continuously
+- VLM goals are published on a side topic and consumed through a mux
+- if inference is slow, disabled, or fails, the baseline path is untouched
 """
 
 from __future__ import annotations
 
 import base64
+import io
 import json
 import math
-import os
-import tempfile
-import time
-from typing import Any, Optional
+import threading
+from typing import Optional
 
 import numpy as np
 import rclpy
-from rclpy.node import Node
 from geometry_msgs.msg import PointStamped
 from nav_msgs.msg import Odometry
+from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
-
-# ── VLM Tool Definitions ────────────────────────────────────────────────
-VLM_TOOLS = [
-    {
-        "name": "assign_waypoints",
-        "description": (
-            "Assign exploration waypoints to robots. Each robot gets a target "
-            "(x, y) in world coordinates. Choose frontiers that maximize "
-            "exploration coverage while keeping robots apart."
-        ),
-        "parameters": {
-            "assignments": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "robot": {"type": "string", "description": "Robot namespace, e.g. robot_a"},
-                        "x": {"type": "number", "description": "Target X in world frame"},
-                        "y": {"type": "number", "description": "Target Y in world frame"},
-                        "reason": {"type": "string", "description": "Brief reason for this assignment"},
-                    },
-                },
-            }
-        },
-    },
-    {
-        "name": "print_green_reached",
-        "description": (
-            "Call this when a robot is close to a detected green marker. "
-            "This signals that the robot has successfully reached a green "
-            "target object. Provide the robot name and marker ID."
-        ),
-        "parameters": {
-            "robot": {"type": "string", "description": "Robot that reached the marker"},
-            "marker_id": {"type": "string", "description": "ID of the green marker reached"},
-            "message": {"type": "string", "description": "Optional message about the discovery"},
-        },
-    },
-]
-
-SYSTEM_PROMPT = """\
-You are a multi-robot exploration coordinator. You see an annotated occupancy grid map \
-showing explored (white), unexplored (gray), and obstacle (dark) regions.
-
-Robot positions are shown as colored circles with heading lines:
-  - Green circle = robot_a
-  - Blue circle = robot_b
-
-Yellow dots mark the topological skeleton (corridor structure).
-Bright green circles mark detected green target objects.
-
-Your job:
-1. Assign each robot a waypoint that maximizes exploration coverage.
-2. Keep robots spread apart — avoid sending both to the same area.
-3. Prefer unexplored (gray) regions adjacent to explored (white) areas (frontiers).
-4. If a robot is near a green marker, call print_green_reached.
-5. Respond with ONLY a JSON object with tool calls. No extra text.
-
-Response format:
-{
-  "tool_calls": [
-    {"name": "assign_waypoints", "arguments": {"assignments": [...]}},
-    {"name": "print_green_reached", "arguments": {"robot": "...", "marker_id": "...", "message": "..."}}
-  ]
-}
-"""
+from .prompting import TOOL_SCHEMAS, build_system_prompt, build_user_prompt
+from .vlm_backends import VLMBackendError, extract_json_object, query_vlm, resolve_api_key, resolve_provider
 
 
 def _yaw_from_quaternion(q):
@@ -107,84 +38,80 @@ class VLMCoordinatorNode(Node):
     def __init__(self):
         super().__init__("vlm_coordinator")
 
-        self.declare_parameter("robot_namespaces", ["robot_a", "robot_b"])
+        self.declare_parameter("robot_namespaces", ["robot"])
         self.declare_parameter("rendered_map_topic", "/vlm/rendered_map")
         self.declare_parameter("scene_json_topic", "/vlm/scene_json")
-        self.declare_parameter("green_detections_topic", "/vlm/green_detections")
-        self.declare_parameter("goal_topic_suffix", "/way_point_coord")
+        self.declare_parameter("artifact_detections_topic", "/vlm/artifact_detections")
+        self.declare_parameter("tool_requests_topic", "/vlm/tool_requests")
+        self.declare_parameter("tool_status_topic", "/vlm/tool_status")
+        self.declare_parameter("goal_topic_suffix", "/vlm_way_point")
         self.declare_parameter("frame_id", "world")
-        self.declare_parameter("replan_period_sec", 20.0)
+        self.declare_parameter("replan_period_sec", 15.0)
+        self.declare_parameter("goal_repeat_period_sec", 0.5)
+        self.declare_parameter("primary_goal_ttl_sec", 2.0)
         self.declare_parameter("vlm_enabled", True)
-        self.declare_parameter("vlm_provider", "openai")  # "openai" or "anthropic"
-        self.declare_parameter("vlm_model", "gpt-4o")
-        self.declare_parameter("vlm_temperature", 0.2)
-        self.declare_parameter("vlm_max_tokens", 1024)
-        self.declare_parameter("vlm_max_retries", 3)
-        self.declare_parameter("green_reach_radius_m", 1.0)
-        # Fallback: if VLM fails, hold last known waypoint
-        self.declare_parameter("fallback_hold_sec", 40.0)
+        self.declare_parameter("vlm_provider", "auto")  # auto | xai | openai | anthropic
+        self.declare_parameter("vlm_model", "")
+        self.declare_parameter("vlm_temperature", 0.1)
+        self.declare_parameter("vlm_max_tokens", 768)
+        self.declare_parameter("vlm_timeout_sec", 15.0)
+        self.declare_parameter("artifact_reach_radius_m", 1.0)
+        self.declare_parameter("max_scene_json_chars", 4000)
 
-        self._namespaces = list(self.get_parameter("robot_namespaces").value)
-        self._goal_suffix = self.get_parameter("goal_topic_suffix").value
-        self._frame_id = self.get_parameter("frame_id").value
-        self._replan_sec = self.get_parameter("replan_period_sec").value
-        self._vlm_enabled = self.get_parameter("vlm_enabled").value
-        self._vlm_provider = self.get_parameter("vlm_provider").value
-        self._vlm_model = self.get_parameter("vlm_model").value
-        self._vlm_temp = self.get_parameter("vlm_temperature").value
-        self._vlm_max_tokens = self.get_parameter("vlm_max_tokens").value
-        self._vlm_retries = self.get_parameter("vlm_max_retries").value
-        self._reach_radius = self.get_parameter("green_reach_radius_m").value
+        self._namespaces = [str(x) for x in self.get_parameter("robot_namespaces").value]
+        self._goal_suffix = str(self.get_parameter("goal_topic_suffix").value)
+        self._frame_id = str(self.get_parameter("frame_id").value)
+        self._replan_sec = max(2.0, float(self.get_parameter("replan_period_sec").value))
+        self._goal_repeat_sec = max(0.2, float(self.get_parameter("goal_repeat_period_sec").value))
+        self._goal_ttl_sec = max(0.5, float(self.get_parameter("primary_goal_ttl_sec").value))
+        self._vlm_enabled = bool(self.get_parameter("vlm_enabled").value)
+        self._vlm_provider = str(self.get_parameter("vlm_provider").value).strip() or "auto"
+        self._vlm_model = str(self.get_parameter("vlm_model").value).strip()
+        self._vlm_temperature = float(self.get_parameter("vlm_temperature").value)
+        self._vlm_max_tokens = int(self.get_parameter("vlm_max_tokens").value)
+        self._vlm_timeout_sec = float(self.get_parameter("vlm_timeout_sec").value)
+        self._artifact_reach_radius_m = float(self.get_parameter("artifact_reach_radius_m").value)
+        self._max_scene_json_chars = int(self.get_parameter("max_scene_json_chars").value)
 
-        # Subscriptions
-        self._rendered_img = None
-        self._scene_json = None
-        self._green_dets = []
-        self._odoms = {}
-
-        self.create_subscription(
-            Image,
-            self.get_parameter("rendered_map_topic").value,
-            self._on_rendered,
-            10,
-        )
-        self.create_subscription(
-            String,
-            self.get_parameter("scene_json_topic").value,
-            self._on_scene_json,
-            10,
-        )
-        self.create_subscription(
-            String,
-            self.get_parameter("green_detections_topic").value,
-            self._on_green_dets,
-            10,
-        )
-        for ns in self._namespaces:
-            self.create_subscription(
-                Odometry, f"/{ns}/odom/nav",
-                lambda msg, _ns=ns: self._on_odom(_ns, msg), 10,
-            )
-
-        # Publishers: one waypoint publisher per robot
-        self._goal_pubs = {}
-        for ns in self._namespaces:
-            topic = f"/{ns}{self._goal_suffix}"
-            self._goal_pubs[ns] = self.create_publisher(PointStamped, topic, 10)
-
-        # State
+        self._rendered_img: Image | None = None
+        self._scene_json: str | None = None
+        self._artifact_detections: list[dict] = []
+        self._tool_status: dict[str, dict] = {}
+        self._odoms: dict[str, Odometry] = {}
         self._last_goals: dict[str, tuple[float, float]] = {}
-        self._last_plan_time = 0.0
-        self._green_reached: set[str] = set()
+        self._last_goal_stamp: dict[str, float] = {}
+        self._last_scene_fingerprint = ""
+        self._seen_artifacts: set[str] = set()
 
-        self._timer = self.create_timer(self._replan_sec, self._replan_tick)
+        self._worker_lock = threading.Lock()
+        self._worker: threading.Thread | None = None
+        self._pending_result: dict | None = None
+        self._pending_error: str | None = None
+        self._pending_fingerprint = ""
 
-        # Also publish at 2 Hz to keep reactive_nav fed with the last goal
-        self._goal_repeat_timer = self.create_timer(0.5, self._republish_goals)
+        self.create_subscription(Image, self.get_parameter("rendered_map_topic").value, self._on_rendered, 10)
+        self.create_subscription(String, self.get_parameter("scene_json_topic").value, self._on_scene_json, 10)
+        self.create_subscription(
+            String, self.get_parameter("artifact_detections_topic").value, self._on_artifact_detections, 10
+        )
+        self.create_subscription(String, self.get_parameter("tool_status_topic").value, self._on_tool_status, 10)
+        for ns in self._namespaces:
+            self.create_subscription(Odometry, f"/{ns}/odom/nav", lambda msg, _ns=ns: self._on_odom(_ns, msg), 10)
 
+        self._goal_pubs = {
+            ns: self.create_publisher(PointStamped, f"/{ns}{self._goal_suffix}", 10) for ns in self._namespaces
+        }
+        self._tool_pub = self.create_publisher(String, self.get_parameter("tool_requests_topic").value, 10)
+
+        self._replan_timer = self.create_timer(self._replan_sec, self._replan_tick)
+        self._result_timer = self.create_timer(0.2, self._drain_worker_result)
+        self._goal_repeat_timer = self.create_timer(self._goal_repeat_sec, self._republish_goals)
+
+        provider = resolve_provider(self._vlm_provider)
         self.get_logger().info(
-            f"VLMCoordinator: vlm={self._vlm_enabled} provider={self._vlm_provider} "
-            f"model={self._vlm_model} T_H={self._replan_sec}s ns={self._namespaces}"
+            "VLMCoordinator started | "
+            f"enabled={self._vlm_enabled} provider={provider} model={self._resolved_model_name(provider)} "
+            f"goal_topic={self._goal_suffix} period={self._replan_sec:.1f}s"
         )
 
     def _on_rendered(self, msg: Image):
@@ -193,325 +120,243 @@ class VLMCoordinatorNode(Node):
     def _on_scene_json(self, msg: String):
         self._scene_json = msg.data
 
-    def _on_green_dets(self, msg: String):
+    def _on_artifact_detections(self, msg: String):
         try:
-            self._green_dets = json.loads(msg.data)
-        except (json.JSONDecodeError, TypeError):
-            pass
+            payload = json.loads(msg.data)
+            self._artifact_detections = payload if isinstance(payload, list) else []
+        except json.JSONDecodeError:
+            self._artifact_detections = []
+
+    def _on_tool_status(self, msg: String):
+        try:
+            payload = json.loads(msg.data)
+        except json.JSONDecodeError:
+            return
+        artifact_id = str(payload.get("artifact_id", "")).strip()
+        if artifact_id:
+            self._tool_status[artifact_id] = payload
 
     def _on_odom(self, ns: str, msg: Odometry):
         self._odoms[ns] = msg
 
-    # ── Replan tick ──────────────────────────────────────────────────
-    def _replan_tick(self):
-        """Called every T_H seconds."""
-        if self._rendered_img is None or self._scene_json is None:
-            self.get_logger().info("VLM replan: waiting for rendered map + scene JSON")
-            return
-
-        # Check green marker proximity → auto-trigger print_green_reached
-        self._check_green_proximity()
-
-        if not self._vlm_enabled:
-            self.get_logger().debug("VLM disabled; relying on CFPA2 fallback.")
-            return
-
-        # Build VLM query
-        scene = {}
-        try:
-            scene = json.loads(self._scene_json)
-        except (json.JSONDecodeError, TypeError):
-            pass
-
-        scene["green_markers"] = self._green_dets
-        scene["green_already_reached"] = list(self._green_reached)
-        scene["tools_available"] = [t["name"] for t in VLM_TOOLS]
-
-        # Encode rendered image as base64 PNG-ish (raw RGB, but APIs want base64 JPEG/PNG)
-        img_b64 = self._encode_image_b64()
-
-        if img_b64 is None:
-            self.get_logger().warn("VLM replan: could not encode map image")
-            return
-
-        # Query VLM
-        response = self._query_vlm(img_b64, scene)
-
-        if response is None:
-            self.get_logger().warn("VLM query failed; keeping last goals.")
-            return
-
-        # Parse and execute tool calls
-        self._execute_tool_calls(response)
-
-    def _check_green_proximity(self):
-        """Auto-trigger print_green_reached if robot is near a green marker."""
-        for det in self._green_dets:
-            mid = det.get("id", "")
-            if mid in self._green_reached:
-                continue
-            mx, my = det.get("x", 0), det.get("y", 0)
-            for ns in self._namespaces:
-                if ns not in self._odoms:
-                    continue
-                rx = self._odoms[ns].pose.pose.position.x
-                ry = self._odoms[ns].pose.pose.position.y
-                dist = math.sqrt((rx - mx) ** 2 + (ry - my) ** 2)
-                if dist < self._reach_radius:
-                    self._green_reached.add(mid)
-                    self.get_logger().info(
-                        f"*** print_green_reached: {ns} reached {mid} "
-                        f"at ({mx:.1f}, {my:.1f}) dist={dist:.2f}m ***"
-                    )
+    def _resolved_model_name(self, provider: str) -> str:
+        if self._vlm_model:
+            return self._vlm_model
+        if provider == "xai":
+            return "grok-2-vision-latest"
+        if provider == "anthropic":
+            return "claude-3-5-sonnet-latest"
+        return "gpt-4o-mini"
 
     def _encode_image_b64(self) -> Optional[str]:
-        """Encode the latest rendered map image as base64 PNG."""
         msg = self._rendered_img
         if msg is None:
             return None
         try:
-            img = np.frombuffer(msg.data, dtype=np.uint8).reshape(
-                (msg.height, msg.width, 3)
-            )
-            # Encode as PNG using raw Python (no cv2 dependency)
-            # Use a simple PPM→base64 encoding that VLM APIs can accept
-            # Actually, let's write a minimal PNG or just use raw bytes description
-            # For API compatibility, produce a JPEG via PIL if available, else PPM
+            img = np.frombuffer(msg.data, dtype=np.uint8).reshape((msg.height, msg.width, 3))
             try:
-                from PIL import Image as PILImage
-                import io
+                from PIL import Image as PILImage  # type: ignore
+
                 pil_img = PILImage.fromarray(img)
                 buf = io.BytesIO()
-                pil_img.save(buf, format="JPEG", quality=80)
+                pil_img.save(buf, format="JPEG", quality=72)
                 return base64.b64encode(buf.getvalue()).decode("ascii")
             except ImportError:
-                # Fallback: encode raw PPM
                 header = f"P6\n{msg.width} {msg.height}\n255\n".encode()
-                ppm_bytes = header + img.tobytes()
-                return base64.b64encode(ppm_bytes).decode("ascii")
-        except (ValueError, IndexError):
+                return base64.b64encode(header + img.tobytes()).decode("ascii")
+        except (ValueError, IndexError, OSError):
             return None
 
-    def _query_vlm(self, img_b64: str, scene: dict) -> Optional[dict]:
-        """Query VLM (OpenAI or Anthropic) and return parsed JSON response."""
-        user_content = (
-            f"Current scene data:\n```json\n{json.dumps(scene, indent=2)}\n```\n\n"
-            "Based on the map image and scene data above, assign waypoints to each robot "
-            "and call print_green_reached if any robot is near a green marker. "
-            "Respond with ONLY JSON."
-        )
-
-        if self._vlm_provider == "anthropic":
-            api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-            env_name = "ANTHROPIC_API_KEY"
-            call_fn = self._call_anthropic_vision
-        else:
-            api_key = os.environ.get("OPENAI_API_KEY", "")
-            env_name = "OPENAI_API_KEY"
-            call_fn = self._call_openai_vision
-
-        if not api_key:
-            self.get_logger().warn(f"{env_name} not set; using dummy planner.")
-            return self._dummy_vlm_response()
-
-        for attempt in range(self._vlm_retries):
-            try:
-                result = call_fn(api_key, img_b64, user_content)
-                if result is not None:
-                    return result
-            except Exception as e:
-                self.get_logger().warn(
-                    f"VLM attempt {attempt+1}/{self._vlm_retries} failed: {e}"
-                )
-
-        return None
-
-    def _call_openai_vision(self, api_key: str, img_b64: str, user_content: str) -> Optional[dict]:
-        """Call OpenAI GPT vision API (gpt-4o, gpt-4o-mini, gpt-4-turbo, etc.)."""
-        import urllib.request
-
-        payload = {
-            "model": self._vlm_model,
-            "temperature": self._vlm_temp,
-            "max_tokens": self._vlm_max_tokens,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{img_b64}",
-                                "detail": "low",
-                            },
-                        },
-                        {"type": "text", "text": user_content},
-                    ],
-                },
-            ],
-        }
-
-        req = urllib.request.Request(
-            "https://api.openai.com/v1/chat/completions",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}",
-            },
-        )
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-
-        text = body["choices"][0]["message"]["content"]
-        self.get_logger().info(f"VLM response ({self._vlm_provider}/{self._vlm_model}): {text[:200]}")
-        return self._parse_vlm_json(text)
-
-    def _call_anthropic_vision(self, api_key: str, img_b64: str, user_content: str) -> Optional[dict]:
-        """Call Anthropic Messages API (claude-sonnet-4-20250514, etc.)."""
-        import urllib.request
-
-        payload = {
-            "model": self._vlm_model,
-            "max_tokens": self._vlm_max_tokens,
-            "system": SYSTEM_PROMPT,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/jpeg",
-                                "data": img_b64,
-                            },
-                        },
-                        {"type": "text", "text": user_content},
-                    ],
-                },
-            ],
-        }
-        if self._vlm_temp is not None:
-            payload["temperature"] = self._vlm_temp
-
-        req = urllib.request.Request(
-            "https://api.anthropic.com/v1/messages",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-            },
-        )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-
-        text = body["content"][0]["text"]
-        self.get_logger().info(f"VLM response ({self._vlm_provider}/{self._vlm_model}): {text[:200]}")
-        return self._parse_vlm_json(text)
-
-    def _dummy_vlm_response(self) -> Optional[dict]:
-        """Dummy response when no API key is set — spreads robots to frontiers.
-
-        Uses scene JSON to find green markers and assigns robots toward them,
-        or falls back to simple directional spreading.
-        """
-        self.get_logger().info("VLM: no API key, using dummy planner")
-
-        assignments = []
-        targets = list(self._green_dets)
-
-        for i, ns in enumerate(self._namespaces):
-            if ns not in self._odoms:
-                continue
-            rx = self._odoms[ns].pose.pose.position.x
-            ry = self._odoms[ns].pose.pose.position.y
-
-            if i < len(targets):
-                # Send robot toward a green marker
-                t = targets[i]
-                tx, ty = t["x"], t["y"]
-            else:
-                # Default: spread robots in different directions
-                angle = (i * math.pi / len(self._namespaces))
-                tx = rx + 3.0 * math.cos(angle)
-                ty = ry + 3.0 * math.sin(angle)
-
-            assignments.append({
-                "robot": ns,
-                "x": round(tx, 2),
-                "y": round(ty, 2),
-                "reason": "dummy_vlm_planner",
-            })
-
-        return {
-            "tool_calls": [
-                {"name": "assign_waypoints", "arguments": {"assignments": assignments}}
-            ]
-        }
-
-    def _parse_vlm_json(self, text: str) -> Optional[dict]:
-        """Parse VLM response text as JSON, stripping markdown fences."""
-        text = text.strip()
-        if text.startswith("```"):
-            lines = text.split("\n")
-            text = "\n".join(lines[1:])
-            if text.endswith("```"):
-                text = text[:-3]
+    def _build_scene(self) -> dict | None:
+        if self._scene_json is None:
+            return None
         try:
-            return json.loads(text.strip())
+            scene = json.loads(self._scene_json)
         except json.JSONDecodeError:
-            self.get_logger().warn(f"VLM response not valid JSON: {text[:200]}")
             return None
 
-    # ── Execute tool calls ───────────────────────────────────────────
-    def _execute_tool_calls(self, response: dict):
-        tool_calls = response.get("tool_calls", [])
-        if not tool_calls:
-            self.get_logger().warn("VLM response had no tool_calls")
+        scene["artifact_detections"] = self._artifact_detections
+        scene["tool_schemas"] = [t["name"] for t in TOOL_SCHEMAS]
+        scene["current_goals"] = {
+            ns: [round(x, 2), round(y, 2)] for ns, (x, y) in sorted(self._last_goals.items())
+        }
+        scene["artifacts_seen"] = sorted(self._seen_artifacts)
+        scene["tool_status"] = self._tool_status
+        scene["artifact_proximity"] = self._artifact_proximity()
+
+        text = json.dumps(scene)
+        if len(text) > self._max_scene_json_chars:
+            scene = dict(scene)
+            scene["tool_status"] = {k: v for k, v in list(self._tool_status.items())[-4:]}
+        return scene
+
+    def _artifact_proximity(self) -> list[dict]:
+        proximity = []
+        for det in self._artifact_detections:
+            artifact_id = str(det.get("id", ""))
+            dx = float(det.get("x", 0.0))
+            dy = float(det.get("y", 0.0))
+            for ns, odom in self._odoms.items():
+                rx = float(odom.pose.pose.position.x)
+                ry = float(odom.pose.pose.position.y)
+                dist = math.hypot(rx - dx, ry - dy)
+                if dist <= self._artifact_reach_radius_m:
+                    proximity.append({"robot": ns, "artifact_id": artifact_id, "distance_m": round(dist, 2)})
+        return proximity
+
+    def _scene_fingerprint(self, scene: dict) -> str:
+        compact = {
+            "robot_states": scene.get("robot_states", {}),
+            "artifact_detections": [
+                {
+                    "id": str(det.get("id", "")),
+                    "x": round(float(det.get("x", 0.0)), 1),
+                    "y": round(float(det.get("y", 0.0)), 1),
+                    "label": str(det.get("label", "")),
+                }
+                for det in scene.get("artifact_detections", [])
+            ],
+            "current_goals": scene.get("current_goals", {}),
+            "artifacts_seen": scene.get("artifacts_seen", []),
+        }
+        return json.dumps(compact, sort_keys=True)
+
+    def _replan_tick(self):
+        if not self._vlm_enabled:
+            return
+        if self._rendered_img is None:
+            return
+        if self._worker is not None and self._worker.is_alive():
+            return
+        provider = resolve_provider(self._vlm_provider)
+        if provider == "none" or not resolve_api_key(provider):
             return
 
-        for tc in tool_calls:
-            name = tc.get("name", "")
-            args = tc.get("arguments", {})
+        scene = self._build_scene()
+        if scene is None:
+            return
+        fingerprint = self._scene_fingerprint(scene)
+        if fingerprint == self._last_scene_fingerprint:
+            return
 
+        image_b64 = self._encode_image_b64()
+        if image_b64 is None:
+            return
+
+        model = self._resolved_model_name(provider)
+        system_prompt = build_system_prompt()
+        user_prompt = build_user_prompt(scene)
+        self._pending_error = None
+        self._pending_result = None
+
+        def _worker():
+            try:
+                raw = query_vlm(
+                    provider=provider,
+                    model=model,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    image_b64=image_b64,
+                    temperature=self._vlm_temperature,
+                    max_tokens=self._vlm_max_tokens,
+                    timeout_sec=self._vlm_timeout_sec,
+                )
+                parsed = extract_json_object(raw)
+                with self._worker_lock:
+                    self._pending_result = {"raw": raw, "parsed": parsed}
+                    self._pending_fingerprint = fingerprint
+            except VLMBackendError as exc:
+                with self._worker_lock:
+                    self._pending_error = str(exc)
+                    self._pending_fingerprint = fingerprint
+
+        self._worker = threading.Thread(target=_worker, daemon=True)
+        self._worker.start()
+
+    def _drain_worker_result(self):
+        with self._worker_lock:
+            result = self._pending_result
+            error = self._pending_error
+            fingerprint = self._pending_fingerprint
+            self._pending_result = None
+            self._pending_error = None
+            self._pending_fingerprint = ""
+
+        if error:
+            self.get_logger().warn(f"VLM inference failed: {error}")
+            self._last_scene_fingerprint = fingerprint
+            return
+        if result is None:
+            return
+
+        parsed = result.get("parsed")
+        raw = str(result.get("raw", ""))
+        if parsed is None:
+            self.get_logger().warn(f"VLM response was not valid JSON: {raw[:240]}")
+            self._last_scene_fingerprint = fingerprint
+            return
+
+        self.get_logger().info(f"VLM response: {raw[:240]}")
+        self._execute_tool_calls(parsed)
+        self._last_scene_fingerprint = fingerprint
+
+    def _execute_tool_calls(self, response: dict):
+        tool_calls = response.get("tool_calls", [])
+        if not isinstance(tool_calls, list):
+            self.get_logger().warn("VLM response did not contain a tool_calls list")
+            return
+        for tc in tool_calls:
+            name = str(tc.get("name", "")).strip()
+            args = tc.get("arguments", {}) or {}
             if name == "assign_waypoints":
                 self._handle_assign_waypoints(args)
-            elif name == "print_green_reached":
-                self._handle_print_green_reached(args)
-            else:
+            elif name == "mark_artifact_seen":
+                self._handle_mark_artifact_seen(args)
+            elif name == "interact_with_artifact":
+                self._handle_interact_with_artifact(args)
+            elif name:
                 self.get_logger().warn(f"Unknown VLM tool: {name}")
 
     def _handle_assign_waypoints(self, args: dict):
         assignments = args.get("assignments", [])
-        for a in assignments:
-            ns = a.get("robot", "")
-            x = float(a.get("x", 0))
-            y = float(a.get("y", 0))
-            reason = a.get("reason", "")
-
+        if not isinstance(assignments, list):
+            return
+        now_sec = self.get_clock().now().nanoseconds / 1e9
+        for item in assignments:
+            ns = str(item.get("robot", "")).strip()
             if ns not in self._goal_pubs:
-                self.get_logger().warn(f"VLM assigned to unknown robot: {ns}")
                 continue
-
+            x = float(item.get("x", 0.0))
+            y = float(item.get("y", 0.0))
+            reason = str(item.get("reason", "")).strip()
             self._last_goals[ns] = (x, y)
+            self._last_goal_stamp[ns] = now_sec
             self._publish_goal(ns, x, y)
-            self.get_logger().info(
-                f"VLM → {ns}: ({x:.2f}, {y:.2f}) reason={reason}"
-            )
+            self.get_logger().info(f"VLM override -> {ns}: ({x:.2f}, {y:.2f}) reason={reason}")
 
-    def _handle_print_green_reached(self, args: dict):
-        robot = args.get("robot", "unknown")
-        marker_id = args.get("marker_id", "unknown")
-        message = args.get("message", "")
-        self._green_reached.add(marker_id)
+    def _handle_mark_artifact_seen(self, args: dict):
+        artifact_id = str(args.get("artifact_id", "")).strip()
+        robot = str(args.get("robot", "")).strip()
+        reason = str(args.get("reason", "")).strip()
+        if artifact_id:
+            self._seen_artifacts.add(artifact_id)
         self.get_logger().info(
-            f"*** TOOL: print_green_reached ***\n"
-            f"  Robot: {robot}\n"
-            f"  Marker: {marker_id}\n"
-            f"  Message: {message}\n"
-            f"  All reached: {self._green_reached}"
+            f"VLM semantic hit -> robot={robot or 'unknown'} artifact={artifact_id or 'unknown'} reason={reason}"
+        )
+
+    def _handle_interact_with_artifact(self, args: dict):
+        payload = {
+            "tool": "interact_with_artifact",
+            "robot": str(args.get("robot", "")).strip(),
+            "artifact_id": str(args.get("artifact_id", "")).strip(),
+            "action": str(args.get("action", "inspect")).strip(),
+            "reason": str(args.get("reason", "")).strip(),
+        }
+        msg = String()
+        msg.data = json.dumps(payload)
+        self._tool_pub.publish(msg)
+        self.get_logger().info(
+            f"VLM tool request -> robot={payload['robot']} artifact={payload['artifact_id']} action={payload['action']}"
         )
 
     def _publish_goal(self, ns: str, x: float, y: float):
@@ -524,9 +369,12 @@ class VLMCoordinatorNode(Node):
         self._goal_pubs[ns].publish(msg)
 
     def _republish_goals(self):
-        """Re-publish last known goals at 2 Hz to keep reactive_nav alive."""
-        for ns, (x, y) in self._last_goals.items():
-            self._publish_goal(ns, x, y)
+        now_sec = self.get_clock().now().nanoseconds / 1e9
+        for ns, goal in list(self._last_goals.items()):
+            stamp = self._last_goal_stamp.get(ns, 0.0)
+            if now_sec - stamp > self._goal_ttl_sec:
+                continue
+            self._publish_goal(ns, goal[0], goal[1])
 
 
 def main(args=None):

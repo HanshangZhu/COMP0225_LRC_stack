@@ -5,7 +5,7 @@ Subscribes to:
   - Fused OccupancyGrid
   - Per-robot Odometry (pose)
   - Skeleton image (from skeleton_extractor)
-  - Green marker detections (from green_marker_detector)
+  - Generic artifact detections (placeholder now, camera-based later)
 
 Publishes:
   - sensor_msgs/Image: annotated map image on /vlm/rendered_map
@@ -40,7 +40,7 @@ class MapRendererNode(Node):
         self.declare_parameter("map_topic", "/world/map")
         self.declare_parameter("robot_namespaces", ["robot_a", "robot_b"])
         self.declare_parameter("skeleton_image_topic", "/vlm/skeleton_image")
-        self.declare_parameter("green_detections_topic", "/vlm/green_detections")
+        self.declare_parameter("artifact_detections_topic", "/vlm/artifact_detections")
         self.declare_parameter("rendered_map_topic", "/vlm/rendered_map")
         self.declare_parameter("scene_json_topic", "/vlm/scene_json")
         self.declare_parameter("frame_id", "world")
@@ -69,8 +69,8 @@ class MapRendererNode(Node):
         )
         self._green_sub = self.create_subscription(
             String,
-            self.get_parameter("green_detections_topic").value,
-            self._on_green_detections,
+            self.get_parameter("artifact_detections_topic").value,
+            self._on_artifact_detections,
             10,
         )
 
@@ -95,7 +95,7 @@ class MapRendererNode(Node):
 
         self._latest_map = None
         self._skeleton_img = None
-        self._green_detections = []
+        self._artifact_detections = []
         self._timer = self.create_timer(1.0 / rate, self._tick)
 
         # Robot colors: robot_a=green, robot_b=blue
@@ -118,11 +118,11 @@ class MapRendererNode(Node):
     def _on_skeleton(self, msg: Image):
         self._skeleton_img = msg
 
-    def _on_green_detections(self, msg: String):
+    def _on_artifact_detections(self, msg: String):
         try:
-            self._green_detections = json.loads(msg.data)
+            self._artifact_detections = json.loads(msg.data)
         except (json.JSONDecodeError, TypeError):
-            self._green_detections = []
+            self._artifact_detections = []
 
     def _tick(self):
         if self._latest_map is None:
@@ -156,8 +156,8 @@ class MapRendererNode(Node):
             except (ValueError, IndexError):
                 pass
 
-        # Overlay green marker detections (bright green circles)
-        for det in self._green_detections:
+        # Overlay artifact detections (bright green circles for now)
+        for det in self._artifact_detections:
             gx = int((det.get("x", 0) - ox) / res)
             gy = int((det.get("y", 0) - oy) / res)
             r = max(3, int(0.3 / res))
@@ -208,7 +208,7 @@ class MapRendererNode(Node):
         # Publish scene JSON
         scene = {
             "robot_states": scene_robots,
-            "green_markers": self._green_detections,
+            "artifact_detections": self._artifact_detections,
             "map_info": {
                 "width": w,
                 "height": h,

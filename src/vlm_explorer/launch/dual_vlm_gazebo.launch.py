@@ -147,7 +147,7 @@ def _launch_setup(context):
                     "hsv_h_high": 85,
                     "hsv_s_low": 80,
                     "hsv_v_low": 80,
-                    "min_blob_pixels": 200,
+                    "min_blob_pixels": 50,
                     "assumed_depth_m": 2.0,
                     "camera_hfov_rad": 2.0944,
                     "dedup_radius_m": 0.8,
