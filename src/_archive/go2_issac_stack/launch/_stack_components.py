@@ -132,17 +132,17 @@ def build_simple_scan_mapper_node(
     )
 
 
-def build_reactive_nav_node(
+def build_default_nav_node(
     ns: str | None,
     use_sim_time,
     profile: str,
     extra_params=None,
     remappings=None,
-    name: str = "reactive_nav",
+    name: str = "default_nav",
 ):
     return _make_node(
         package="go2_gazebo_sim",
-        executable="reactive_nav.py",
+        executable="default_nav.py",
         name=name,
         ns=ns,
         use_sim_time=use_sim_time,

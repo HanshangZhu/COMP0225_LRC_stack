@@ -30,7 +30,7 @@ from launch_ros.actions import Node
 
 sys.path.append(os.path.dirname(__file__))
 from modules.assets import build_dual_robot_stack, build_namespaced_robot_description
-from modules.control import build_autonomy_enabler_node, build_reactive_nav_node, build_wall_checker_node
+from modules.control import build_autonomy_enabler_node, build_default_nav_node, build_wall_checker_node
 from modules.navigation import build_geometric_frontier_node
 from modules.orchestration import build_rviz_node
 from modules.perception import build_qos_bridge_node
@@ -79,7 +79,7 @@ def _build_cleanup_stale_command() -> str:
         "/go2_nav_algorithms/lib/go2_nav_algorithms/simple_frontier_explorer.py",
         "/go2w_observability/lib/go2w_observability/dual_map_coverage_visualizer.py",
         "/go2_gazebo_sim/lib/go2_gazebo_sim/shared_map_fuser.py",
-        "/go2w_control/lib/go2w_control/reactive_nav.py",
+        "/go2w_control/lib/go2w_control/default_nav.py",
         "/go2w_control/lib/go2w_control/autonomy_enabler.py",
         "/go2w_perception/lib/go2w_perception/twist_bridge.py",
         "/go2w_control/lib/go2w_control/go2w_hybrid_cmd_router.py",
@@ -335,7 +335,7 @@ def _robot_autonomy_actions(
     enable_slam: bool,
     enable_control: bool,
     enable_navigation: bool,
-    reactive_nav_profile: str,
+    default_nav_profile: str,
     hybrid_motion_config: str | None = None,
     wheel_controller_name: str | None = None,
     hybrid_motion_extra_params: dict | None = None,
@@ -536,10 +536,10 @@ def _robot_autonomy_actions(
             )
         )
         actions.append(
-            build_reactive_nav_node(
+            build_default_nav_node(
                 ns=ns,
                 use_sim_time=use_sim_time,
-                profile=reactive_nav_profile,
+                profile=default_nav_profile,
                 extra_params={
                     "frontier_replan_topic": f"/{ns}/frontier_replan",
                     "stop_topic": f"/{ns}/stop",
@@ -563,7 +563,7 @@ def _robot_autonomy_actions(
     return [TimerAction(period=startup_delay_sec, actions=actions)]
 
 
-def _build_dual_profile_actions(context, *, launch_name: str, robot_config: dict[str, str], reactive_nav_profile: str):
+def _build_dual_profile_actions(context, *, launch_name: str, robot_config: dict[str, str], default_nav_profile: str):
     profile = _get(context, "profile").strip().lower()
 
     if profile == "pointlio_debug":
@@ -886,7 +886,7 @@ def _build_dual_profile_actions(context, *, launch_name: str, robot_config: dict
         enable_slam=enable_slam,
         enable_control=enable_control,
         enable_navigation=enable_navigation,
-        reactive_nav_profile=reactive_nav_profile,
+        default_nav_profile=default_nav_profile,
         hybrid_motion_config=hybrid_motion_config,
         wheel_controller_name=wheel_controller_names["robot_a"],
         hybrid_motion_extra_params=hybrid_motion_extra_params,
@@ -904,7 +904,7 @@ def _build_dual_profile_actions(context, *, launch_name: str, robot_config: dict
         enable_slam=enable_slam,
         enable_control=enable_control,
         enable_navigation=enable_navigation,
-        reactive_nav_profile=reactive_nav_profile,
+        default_nav_profile=default_nav_profile,
         hybrid_motion_config=hybrid_motion_config,
         wheel_controller_name=wheel_controller_names["robot_b"],
         hybrid_motion_extra_params=hybrid_motion_extra_params,
@@ -1427,7 +1427,7 @@ def _build_dual_profile_actions(context, *, launch_name: str, robot_config: dict
     return actions
 
 
-def generate_fixed_variant_launch_description(*, launch_name: str, robot_variant: str, reactive_nav_profile: str):
+def generate_fixed_variant_launch_description(*, launch_name: str, robot_variant: str, default_nav_profile: str):
     go2_gazebo_pkg = get_package_share_directory("go2_gazebo_sim")
     go2_config_pkg = get_package_share_directory("go2_config")
     robot_config = _build_robot_variant_config(
@@ -1511,7 +1511,7 @@ def generate_fixed_variant_launch_description(*, launch_name: str, robot_variant
                     context,
                     launch_name=launch_name,
                     robot_config=robot_config,
-                    reactive_nav_profile=reactive_nav_profile,
+                    default_nav_profile=default_nav_profile,
                 )
             ),
         ]
@@ -1522,5 +1522,5 @@ def generate_launch_description():
     return generate_fixed_variant_launch_description(
         launch_name="dual_go2_modular",
         robot_variant="go2",
-        reactive_nav_profile="reactive_nav_dual.yaml",
+        default_nav_profile="default_nav_dual.yaml",
     )

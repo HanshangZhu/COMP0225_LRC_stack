@@ -133,7 +133,7 @@ Growing area but **sim-to-real transfer** and **sample efficiency** remain hard 
 | `go2_far_planner` | FAR route planner | ROS2 port from CMU |
 | `mtare_ros2` / `mtare_ros1_ws` | M-TARE (multi-robot) | Alternative coordinator to CFPA2 |
 | Geometric frontier detection | Classic frontier | In `go2_nav_algorithms` |
-| `reactive_nav` A\* planner | Local + global nav | C++ ctypes A\* for speed |
+| `default_nav` A\* planner | Local + global nav | C++ ctypes A\* for speed |
 
 **Gaps / potential additions**:
 - **Learning-based frontier selection** on top of your existing frontier detector (low risk, potential gain)

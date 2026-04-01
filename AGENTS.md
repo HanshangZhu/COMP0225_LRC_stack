@@ -40,7 +40,7 @@ When debugging this stack, always trace the **full data pipeline** step by step:
 | Map flickering / doubled walls | Same scan painted multiple times with different poses | `simple_scan_mapper_cpp.cpp` update timer vs scan arrival rate |
 | Map starburst / rotated structures | TF timestamp mismatch or stale TF fallback | TF lookup code, `ExtrapolationException` handlers |
 | "No Effective Points!" in Fast-LIO | Wrong timestamp span in pointcloud_adapter | `pointcloud_adapter.py` time_offset calculation |
-| Robot walks through walls | Planner doesn't use occupancy grid | `reactive_nav_core/planner.py` — plans on scan grid, not map |
+| Robot walks through walls | Planner doesn't use occupancy grid | `default_nav_core/planner.py` — plans on scan grid, not map |
 | Scattered occupied cells in map | Ground/leg hits passing height filter | `pointcloud_to_laserscan` `min_height` parameter |
 
 ---
@@ -57,7 +57,7 @@ Gazebo LiDAR → registered_scan → [qos_bridge] → registered_scan_reliable
                                                         │
                                   ┌─────────────────────┤
                                   ▼                     ▼
-                        simple_scan_mapper_cpp    reactive_nav
+                        simple_scan_mapper_cpp    default_nav
                         → /{ns}/map (OccGrid)     ← /{ns}/map (A* global)
                                                   ← scan_3d (local avoid)
                                                   → cmd_vel_stamped
@@ -69,7 +69,7 @@ Gazebo p3d → odom/ground_truth → slam_odom_relay → odom/nav
 ### Key Nodes
 
 - **`simple_scan_mapper_cpp`**: Builds 2D occupancy grid from laser scan + TF. Owns its own TF broadcaster (world → base_link from odom). Each scan painted ONCE.
-- **`reactive_nav`**: Layered navigation — A* global planner on map + scan-based local obstacle avoidance. Background thread for A*.
+- **`default_nav`**: Layered navigation — A* global planner on map + scan-based local obstacle avoidance. Background thread for A*.
 - **`pointcloud_adapter`**: Adapts Gazebo point clouds for Fast-LIO (adds per-point timestamps, ring field). Only used when `use_fast_lio:=true`.
 - **`slam_odom_relay`**: Passes through or aligns odometry. Does NOT broadcast TF.
 
@@ -102,7 +102,7 @@ killall -9 gzserver gzclient rviz2
 |---|---|
 | `config/nav/simple_scan_mapper_single_go2w.yaml` | Grid scoring (hit_increment, thresholds) |
 | `config/nav/geometric_frontier_single.yaml` | Frontier detection params |
-| `config/nav/reactive_nav_single_go2w.yaml` | Local nav speeds, tolerances |
+| `config/nav/default_nav_single_go2w.yaml` | Local nav speeds, tolerances |
 | `config/control/go2w_hybrid_motion.yaml` | Wheel/leg blending |
 | `urdf/go2w/go2w_description_3d_lidar.xacro` | Sensor configs (LiDAR, p3d rates) |
 

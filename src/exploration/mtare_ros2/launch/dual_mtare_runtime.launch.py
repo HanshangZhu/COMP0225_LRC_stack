@@ -51,27 +51,27 @@ def _normalize_backend(value: str) -> str:
     )
 
 
-def _build_reactive_nav_node(
+def _build_default_nav_node(
     *,
     ns: str,
     use_sim_time: bool,
-    reactive_nav_yaml: str,
+    default_nav_yaml: str,
     nav_odom_topic: str,
     planning_scan_topic: str,
-    reactive_nav_startup_delay: float,
+    default_nav_startup_delay: float,
 ) -> Node:
     return Node(
         package="go2w_nav",
-        executable="reactive_nav.py",
+        executable="default_nav.py",
         namespace=ns,
-        name="reactive_nav",
+        name="default_nav",
         parameters=[
-            reactive_nav_yaml,
+            default_nav_yaml,
             {"use_sim_time": use_sim_time},
             {
                 "frontier_replan_topic": f"/{ns}/frontier_replan",
                 "stop_topic": f"/{ns}/stop",
-                "startup_delay": reactive_nav_startup_delay,
+                "startup_delay": default_nav_startup_delay,
             },
         ],
         remappings=[
@@ -148,8 +148,8 @@ def _build_control_nodes(
     tf_remaps: list[tuple[str, str]],
     nav_odom_topic: str,
     planning_scan_topic: str,
-    reactive_nav_yaml: str,
-    reactive_nav_startup_delay: float,
+    default_nav_yaml: str,
+    default_nav_startup_delay: float,
     planning_scan_min_height: float,
     planning_scan_max_height: float,
     planning_scan_range_min: float,
@@ -173,13 +173,13 @@ def _build_control_nodes(
         ],
     )
 
-    reactive_nav_node = _build_reactive_nav_node(
+    default_nav_node = _build_default_nav_node(
         ns=ns,
         use_sim_time=use_sim_time,
-        reactive_nav_yaml=reactive_nav_yaml,
+        default_nav_yaml=default_nav_yaml,
         nav_odom_topic=nav_odom_topic,
         planning_scan_topic=planning_scan_topic,
-        reactive_nav_startup_delay=reactive_nav_startup_delay,
+        default_nav_startup_delay=default_nav_startup_delay,
     )
 
     autonomy_enabler_node = build_autonomy_enabler_node(
@@ -190,7 +190,7 @@ def _build_control_nodes(
         remappings=[("/way_point", f"/{ns}/way_point_coord"), ("/joy", f"/{ns}/joy")],
     )
 
-    return [pointcloud_to_laserscan_node, reactive_nav_node, autonomy_enabler_node]
+    return [pointcloud_to_laserscan_node, default_nav_node, autonomy_enabler_node]
 
 
 def _build_mtare_map_viz_nodes(
@@ -461,7 +461,7 @@ def _launch_setup(context):
     planning_scan_max_height = float(LaunchConfiguration("planning_scan_max_height").perform(context))
     planning_scan_range_min = float(LaunchConfiguration("planning_scan_range_min").perform(context))
     planning_scan_range_max = float(LaunchConfiguration("planning_scan_range_max").perform(context))
-    reactive_nav_startup_delay = float(LaunchConfiguration("reactive_nav_startup_delay").perform(context))
+    default_nav_startup_delay = float(LaunchConfiguration("default_nav_startup_delay").perform(context))
     mtare_waypoint_stale_timeout_sec = float(LaunchConfiguration("mtare_waypoint_stale_timeout_sec").perform(context))
     mtare_waypoint_republish_hz = float(LaunchConfiguration("mtare_waypoint_republish_hz").perform(context))
     mtare_marker_frame = LaunchConfiguration("mtare_marker_frame").perform(context).strip()
@@ -481,7 +481,7 @@ def _launch_setup(context):
     mtare_teammate_stale_ttl_sec = float(LaunchConfiguration("mtare_teammate_stale_ttl_sec").perform(context))
 
     slam_config = os.path.join(go2_issac_pkg, "config", "slam", "pointlio_isaac.yaml")
-    reactive_nav_yaml = os.path.join(go2_issac_pkg, "config", "nav", "reactive_nav_dual.yaml")
+    default_nav_yaml = os.path.join(go2_issac_pkg, "config", "nav", "default_nav_dual.yaml")
     mtare_coordinator_yaml = os.path.join(get_package_share_directory("mtare_ros2"), "config", "mtare_ros2.yaml")
 
     ros1_ws_setup = os.path.join(mtare_ros1_ws_path, "devel", "setup.bash")
@@ -575,8 +575,8 @@ def _launch_setup(context):
             tf_remaps=tf_remaps,
             nav_odom_topic=nav_odom_topic,
             planning_scan_topic=planning_scan_topic,
-            reactive_nav_yaml=reactive_nav_yaml,
-            reactive_nav_startup_delay=reactive_nav_startup_delay,
+            default_nav_yaml=default_nav_yaml,
+            default_nav_startup_delay=default_nav_startup_delay,
             planning_scan_min_height=planning_scan_min_height,
             planning_scan_max_height=planning_scan_max_height,
             planning_scan_range_min=planning_scan_range_min,
@@ -757,7 +757,7 @@ def _launch_setup(context):
         f"missing_shared_graph_packages={missing_shared_graph_packages} "
         f"ros1_available={ros1_available} "
         f"fastdds_transport={fastdds_transport} "
-        f"reactive_nav_startup_delay={reactive_nav_startup_delay:.1f} "
+        f"default_nav_startup_delay={default_nav_startup_delay:.1f} "
         f"mtare_waypoint_stale_timeout_sec={mtare_waypoint_stale_timeout_sec:.1f} "
         f"mtare_use_shared_map={mtare_use_shared_map} "
         f"mtare_overlap_weight={mtare_overlap_weight:.3f} "
@@ -898,9 +898,9 @@ def generate_launch_description():
             DeclareLaunchArgument("planning_scan_range_min", default_value="0.05"),
             DeclareLaunchArgument("planning_scan_range_max", default_value="12.0"),
             DeclareLaunchArgument(
-                "reactive_nav_startup_delay",
+                "default_nav_startup_delay",
                 default_value="8.0",
-                description="Startup gate (seconds) for reactive_nav in M-TARE runtime.",
+                description="Startup gate (seconds) for default_nav in M-TARE runtime.",
             ),
             DeclareLaunchArgument(
                 "mtare_scenario",

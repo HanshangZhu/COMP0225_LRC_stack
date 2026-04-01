@@ -45,6 +45,6 @@ composition (scan projection, mapper, goal passthrough, waypoint mux wiring).
 
 ## Out of Scope
 
-- Local control loops (`reactive_nav`).
+- Local control loops (`default_nav`).
 - Sensor transport bridges (`qos_bridge`, `twist_bridge`).
 - Gazebo/Isaac simulation bringup.

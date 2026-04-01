@@ -33,6 +33,8 @@ setup(
             "interaction_tool_node = vlm_explorer.interaction_tool_node:main",
             "vlm_coordinator_node = vlm_explorer.vlm_coordinator_node:main",
             "florence2_detector_node = vlm_explorer.florence2_detector_node:main",
+            "red_block_detector_node = vlm_explorer.red_block_detector_node:main",
+            "yolo_detector_node = vlm_explorer.yolo_detector_node:main",
         ],
     },
 )

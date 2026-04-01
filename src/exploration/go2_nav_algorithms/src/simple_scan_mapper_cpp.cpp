@@ -114,7 +114,7 @@ public:
       });
 
     // TRANSIENT_LOCAL durability: standard for map topics.
-    // Matches reactive_nav's subscriber QoS — without this, the nav
+    // Matches default_nav's subscriber QoS — without this, the nav
     // never receives the map and falls back to local scan-based planning.
     auto map_qos = rclcpp::QoS(rclcpp::KeepLast(1));
     map_qos.transient_local();

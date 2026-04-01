@@ -23,7 +23,7 @@ Gazebo LiDAR (1024×16 gpu_ray @ 10Hz)
                                             │
                           ┌─────────────────┤
                           ▼                 ▼
-                simple_scan_mapper_cpp   reactive_nav (12Hz)
+                simple_scan_mapper_cpp   default_nav (12Hz)
                 → /{ns}/map (OccGrid)    ← /{ns}/map (A* global planner)
                   (TRANSIENT_LOCAL QoS)  ← scan_3d (local obstacle avoidance)
                                          → cmd_vel_stamped
@@ -36,7 +36,7 @@ Gazebo p3d (50Hz) → odom/ground_truth → slam_odom_relay (GT bootstrap)
 | Node | Language | Role |
 |---|---|---|
 | `simple_scan_mapper_cpp` | C++ | Builds 2D occupancy grid from LaserScan + TF (log-odds, stop-at-occupied raytrace) |
-| `reactive_nav` | Python | Layered navigation: A* on global map + scan-based local avoidance |
+| `default_nav` | Python | Layered navigation: A* on global map + scan-based local avoidance |
 | `cfpa2_coordinator_node` | C++ | Joint frontier assignment with overlap penalties, space-time A* |
 | `go2w_hybrid_cmd_router` | Python | Routes cmd_vel between leg controller and wheel velocity controller |
 | `wall_collision_checker` | Python | Sensor-level obstacle gating (emergency stop) |
@@ -80,8 +80,8 @@ Optional space-time A* converts the final goal into a safer short-horizon waypoi
 /registered_scan → qos_bridge → /registered_scan_reliable
                                → pointcloud_to_laserscan → /scan_3d
 /scan_3d + /odom/nav → simple_scan_mapper_cpp → /map
-frontier node → waypoint topic → reactive_nav
-reactive_nav → /cmd_vel_stamped → twist_bridge → /cmd_vel
+frontier node → waypoint topic → default_nav
+default_nav → /cmd_vel_stamped → twist_bridge → /cmd_vel
 ```
 
 **SLAM/odom source:**

@@ -110,7 +110,7 @@ class RobotStatusMonitor(Node):
                 10,
             )
 
-            # Nav diagnostics (JSON from reactive_nav)
+            # Nav diagnostics (JSON from default_nav)
             self.create_subscription(
                 String,
                 f"/{ns}/nav_status",

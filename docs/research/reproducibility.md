@@ -133,7 +133,7 @@ source install/setup.bash
 ### Smoke Checks
 
 ```bash
-ros2 node list | grep -E "cfpa2_coordinator|robot_status_monitor|reactive_nav"
+ros2 node list | grep -E "cfpa2_coordinator|robot_status_monitor|default_nav"
 ros2 topic echo /robot_a/nav_status --once
 ros2 topic hz /robot/scan_3d        # expect ~10 Hz
 ros2 topic hz /robot/odom/nav       # expect ~50 Hz
@@ -190,7 +190,7 @@ This launches the complete stack:
 - `transform_everything` → Cartographer 3D SLAM → `/map` + TF
 - `carto_odom_bridge` → `/robot/odom/nav`
 - CFPA2 frontier exploration → waypoints
-- `reactive_nav` (A* + local avoidance) → `/cmd_vel`
+- `default_nav` (A* + local avoidance) → `/cmd_vel`
 
 Joystick manual override available during autonomous operation.
 

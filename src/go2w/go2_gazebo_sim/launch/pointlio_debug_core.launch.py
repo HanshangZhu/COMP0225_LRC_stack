@@ -6,7 +6,7 @@ This launch file:
 3. Starts QoS bridge for reliable point cloud delivery
 4. Launches FAST-LIO / Point-LIO SLAM node
 5. Launches odom comparison tool (SLAM vs ground truth → CSV)
-6. [OPTIONAL] Launches the autonomy stack (frontier + reactive_nav)
+6. [OPTIONAL] Launches the autonomy stack (frontier + default_nav)
 
 Modes:
   Manual (default):
@@ -15,9 +15,9 @@ Modes:
 
   Autonomous:
     ros2 launch go2_gazebo_sim test_pointlio.launch.py autonomous:=true
-    # Robot explores on its own using simple_scan_mapper + simple_frontier_explorer + reactive_nav
+    # Robot explores on its own using simple_scan_mapper + simple_frontier_explorer + default_nav
 
-  The 'autonomous' flag controls whether the frontier planner + reactive_nav
+  The 'autonomous' flag controls whether the frontier planner + default_nav
   are launched. SLAM runs in both modes. The autonomy nodes consume SLAM
   odometry via slam_odom_relay instead of ground truth.
 
@@ -200,7 +200,7 @@ def generate_launch_description():
         condition=IfCondition(autonomous),
     )
 
-    # 6b. PointCloud → LaserScan (used by mapper and reactive_nav)
+    # 6b. PointCloud → LaserScan (used by mapper and default_nav)
     pointcloud_to_laserscan = build_pointcloud_to_laserscan_node(
         ns=None,
         use_sim_time=True,
@@ -266,16 +266,16 @@ def generate_launch_description():
         condition=IfCondition(autonomous),
     )
 
-    # 6e. Reactive Nav controller — uses SLAM odom
-    reactive_nav_config = os.path.join(
-        get_package_share_directory("go2w_config"), "config", "nav", "reactive_nav_single.yaml"
+    # 6e. Default Nav controller — uses SLAM odom
+    default_nav_config = os.path.join(
+        get_package_share_directory("go2w_config"), "config", "nav", "default_nav_single.yaml"
     )
-    reactive_nav_node = Node(
+    default_nav_node = Node(
         package="go2w_nav",
-        executable="reactive_nav.py",
-        name="reactive_nav",
+        executable="default_nav.py",
+        name="default_nav",
         parameters=[
-            reactive_nav_config,
+            default_nav_config,
             {"use_sim_time": True},
         ],
         remappings=[
@@ -327,7 +327,7 @@ def generate_launch_description():
             wall_checker_node,
             simple_scan_mapper_node,
             geometric_frontier_node,
-            reactive_nav_node,
+            default_nav_node,
         ],
     )
 

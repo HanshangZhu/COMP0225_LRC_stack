@@ -9,8 +9,8 @@ which provides:
 
 This launch file adds the navigation stack:
   carto_odom_bridge → /robot/odom/nav (Odometry from TF)
-  pointcloud_to_laserscan → /robot/scan_3d (LaserScan for reactive_nav local avoidance)
-  navigation sub-launch → mapper + cfpa2 + reactive_nav
+  pointcloud_to_laserscan → /robot/scan_3d (LaserScan for default_nav local avoidance)
+  navigation sub-launch → mapper + cfpa2 + default_nav
   safety sub-launch → wall_checker + autonomy_enabler
   twist_bridge → cmd_vel_activity_mux → /cmd_vel (sport API)
 
@@ -58,8 +58,8 @@ def _launch_setup(context):
     safety_launch = os.path.join(go2w_config_pkg, "launch", "safety.launch.py")
     obs_launch = os.path.join(go2w_config_pkg, "launch", "observability.launch.py")
 
-    if map_backend not in {"scan", "carto_binary"}:
-        raise ValueError(f"Unsupported map_backend '{map_backend}' (expected scan or carto_binary)")
+    if map_backend not in {"scan", "carto_binary", "carto_2d"}:
+        raise ValueError(f"Unsupported map_backend '{map_backend}' (expected scan, carto_binary or carto_2d)")
 
     actions = []
 
@@ -147,8 +147,8 @@ def _launch_setup(context):
         )
     )
 
-    # ── Real-specific: carto_binary mapper fallback ──
-    if not external_mapper and map_backend == "carto_binary":
+    # ── Real-specific: carto_binary / carto_2d mapper fallback ──
+    if not external_mapper and map_backend in {"carto_binary", "carto_2d"}:
         actions.append(
             Node(
                 package="go2w_perception",
@@ -170,7 +170,7 @@ def _launch_setup(context):
             )
         )
 
-    # ── Shared navigation sub-launch (mapper + cfpa2 + reactive_nav) ──
+    # ── Shared navigation sub-launch (mapper + cfpa2 + default_nav) ──
     # scan mapper is skipped when map_backend != "scan" (external_mapper handles it)
     use_external_mapper = external_mapper or map_backend != "scan"
     actions.append(

@@ -8,7 +8,7 @@
 #        ./go2w_ethernet_start.sh fastlio      # setup + launch Fast-LIO SLAM
 #        ./go2w_ethernet_start.sh fastlio_sam  # Fast-LIO + SC-PGO loop closure
 #        ./go2w_ethernet_start.sh cartographer # Cartographer 3D SLAM only
-#        ./go2w_ethernet_start.sh autonomy     # Cartographer + CFPA2 + reactive_nav (scan mapper)
+#        ./go2w_ethernet_start.sh autonomy     # Cartographer + CFPA2 + default_nav (scan mapper)
 #        ./go2w_ethernet_start.sh autonomy octomap    # Same but with Octomap 3D→2D grid
 #        ./go2w_ethernet_start.sh autonomy elevation  # Same but with traversability grid
 #        ./go2w_ethernet_start.sh mapping      # Carto + Octomap + frontiers, NO controller
@@ -742,7 +742,7 @@ if [[ "${1:-}" == "autonomy" ]]; then
       ;;
   esac
   echo "      → CFPA2 frontier exploration → waypoints"
-  echo "      → reactive_nav (A* + local avoid) → /cmd_vel"
+  echo "      → default_nav (A* + local avoid) → /cmd_vel"
   echo "      → Unitree obstacle avoidance API (api_id=1003)"
   echo "      → frontier_3d_markers → /frontier_cylinders (RViz)"
   echo "  Ctrl+C to stop"
@@ -754,7 +754,7 @@ if [[ "${1:-}" == "autonomy" ]]; then
   pkill -9 -f cartographer_node 2>/dev/null || true
   pkill -9 -f cartographer_occupancy 2>/dev/null || true
   pkill -9 -f transform_everything 2>/dev/null || true
-  pkill -9 -f reactive_nav 2>/dev/null || true
+  pkill -9 -f default_nav 2>/dev/null || true
   pkill -9 -f cfpa2 2>/dev/null || true
   pkill -9 -f carto_odom_bridge 2>/dev/null || true
   pkill -9 -f twist_bridge 2>/dev/null || true
@@ -860,8 +860,8 @@ if [[ "${1:-}" == "autonomy" ]]; then
     -r projected_map:=/octomap/projected_map &
   OCTO_PID=$!
 
-  # 5) Full navigation stack (CFPA2 + reactive_nav + Unitree obstacle avoidance)
-  echo "  Launching navigation stack (CFPA2 + reactive_nav + obstacle_avoidance)..."
+  # 5) Full navigation stack (CFPA2 + default_nav + Unitree obstacle avoidance)
+  echo "  Launching navigation stack (CFPA2 + default_nav + obstacle_avoidance)..."
   ros2 launch go2_real_bringup single_go2w_real_cfpa2.launch.py \
     robot_namespace:=robot \
     enable_manual_fallback:=true \

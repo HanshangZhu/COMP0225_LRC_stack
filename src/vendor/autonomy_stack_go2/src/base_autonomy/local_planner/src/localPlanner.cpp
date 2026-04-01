@@ -694,7 +694,7 @@ int main(int argc, char** argv)
         point.intensity = plannerCloud->points[i].intensity;
 
         float dis = sqrt(point.x * point.x + point.y * point.y);
-        if (dis < adjacentRange && ((point.z > minRelZ && point.z < maxRelZ) || useTerrainAnalysis)) {
+        if (dis < adjacentRange && point.z > minRelZ && point.z < maxRelZ) {
           plannerCloudCrop->push_back(point);
         }
       }

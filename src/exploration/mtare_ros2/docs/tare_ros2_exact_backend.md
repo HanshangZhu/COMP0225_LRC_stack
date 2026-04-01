@@ -29,7 +29,7 @@ mtare_behavior_executive_cpp
   -> /<ns>/way_point_coord   (single writer)
   -> /<ns>/planner_mode
 
-reactive_nav
+default_nav
   <- /<ns>/way_point_coord
 ```
 

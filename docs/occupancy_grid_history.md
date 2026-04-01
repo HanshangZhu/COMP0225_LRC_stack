@@ -4,7 +4,7 @@
 
 The VLM exploration stack needs a 2D OccupancyGrid (`/robot/map`) with proper **free / occupied / unknown** semantics for:
 - CFPA2 frontier extraction (needs explicit free-to-unknown boundaries)
-- reactive_nav grid planning (needs free-space corridors to plan A* paths)
+- default_nav grid planning (needs free-space corridors to plan A* paths)
 
 Getting a clean 2D map from a 3D LiDAR + SLAM stack turned out to be non-trivial.
 
@@ -16,7 +16,7 @@ Getting a clean 2D map from a 3D LiDAR + SLAM stack turned out to be non-trivial
 
 The first approach used Cartographer's 3D trajectory builder and its built-in `cartographer_occupancy_grid_node` to project the 3D occupancy grid to 2D.
 
-**Problem:** The projected 2D map was almost entirely "occupied + unknown" with nearly zero explicit free cells. Cartographer's 3D builder does not do proper free-space carving in 2D projection — it marks cells that were hit as occupied, but doesn't trace free-space rays through the 2D plane. CFPA2 could not find frontiers and reactive_nav could not plan paths.
+**Problem:** The projected 2D map was almost entirely "occupied + unknown" with nearly zero explicit free cells. Cartographer's 3D builder does not do proper free-space carving in 2D projection — it marks cells that were hit as occupied, but doesn't trace free-space rays through the 2D plane. CFPA2 could not find frontiers and default_nav could not plan paths.
 
 ### 2. OctoMap (experimental, had radial spoke artifacts)
 

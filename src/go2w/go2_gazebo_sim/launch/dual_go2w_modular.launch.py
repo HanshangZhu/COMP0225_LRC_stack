@@ -18,5 +18,5 @@ def generate_launch_description():
     return generate_fixed_variant_launch_description(
         launch_name="dual_go2w_modular",
         robot_variant="go2w",
-        reactive_nav_profile="reactive_nav_dual_go2w.yaml",
+        default_nav_profile="default_nav_dual_go2w.yaml",
     )

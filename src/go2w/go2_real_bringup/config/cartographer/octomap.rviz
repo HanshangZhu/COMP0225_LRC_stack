@@ -104,7 +104,7 @@ Visualization Manager:
         Value: /frontier_cylinders
       Value: true
 
-    # Planned path from reactive_nav (A* / local planner target chain)
+    # Planned path from default_nav (A* / local planner target chain)
     - Alpha: 1
       Buffer Length: 1
       Class: rviz_default_plugins/Path

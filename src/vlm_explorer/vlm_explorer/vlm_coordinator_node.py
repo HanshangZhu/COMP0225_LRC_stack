@@ -13,7 +13,10 @@ import base64
 import io
 import json
 import math
+import os
 import threading
+import time
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -57,6 +60,8 @@ class VLMCoordinatorNode(Node):
         self.declare_parameter("vlm_timeout_sec", 15.0)
         self.declare_parameter("artifact_reach_radius_m", 1.0)
         self.declare_parameter("max_scene_json_chars", 4000)
+        self.declare_parameter("mission_prompt", "")
+        self.declare_parameter("vlm_log_dir", "")
 
         self._namespaces = [str(x) for x in self.get_parameter("robot_namespaces").value]
         self._goal_suffix = str(self.get_parameter("goal_topic_suffix").value)
@@ -72,6 +77,21 @@ class VLMCoordinatorNode(Node):
         self._vlm_timeout_sec = float(self.get_parameter("vlm_timeout_sec").value)
         self._artifact_reach_radius_m = float(self.get_parameter("artifact_reach_radius_m").value)
         self._max_scene_json_chars = int(self.get_parameter("max_scene_json_chars").value)
+        self._mission_prompt = str(self.get_parameter("mission_prompt").value).strip()
+
+        # VLM history logging
+        log_dir_param = str(self.get_parameter("vlm_log_dir").value).strip()
+        if not log_dir_param:
+            log_dir_param = os.path.join(
+                os.environ.get("ROS_LOG_DIR", os.path.expanduser("~/.ros/log")),
+                "vlm_history",
+            )
+        run_stamp = time.strftime("%Y%m%d_%H%M%S")
+        self._log_dir = Path(log_dir_param) / run_stamp
+        self._log_dir.mkdir(parents=True, exist_ok=True)
+        self._cycle_count = 0
+        (self._log_dir / "index.json").write_text("[]")
+        self.get_logger().info(f"VLM history logging to {self._log_dir}")
 
         self._rendered_img: Image | None = None
         self._scene_json: str | None = None
@@ -143,7 +163,7 @@ class VLMCoordinatorNode(Node):
         if self._vlm_model:
             return self._vlm_model
         if provider == "xai":
-            return "grok-2-vision-latest"
+            return "grok-4-1-fast-non-reasoning"
         if provider == "anthropic":
             return "claude-3-5-sonnet-latest"
         return "gpt-4o-mini"
@@ -221,6 +241,50 @@ class VLMCoordinatorNode(Node):
         }
         return json.dumps(compact, sort_keys=True)
 
+    def _log_cycle(self, system_prompt: str, user_prompt: str, scene: dict,
+                   image_b64: str | None, model: str, provider: str,
+                   raw_response: str | None, parsed: dict | None,
+                   error: str | None, latency_sec: float):
+        """Persist a full VLM cycle to disk for the debug viewer."""
+        self._cycle_count += 1
+        cycle_id = f"{self._cycle_count:04d}"
+        cycle_dir = self._log_dir / cycle_id
+        cycle_dir.mkdir(exist_ok=True)
+        try:
+            # Save image
+            if image_b64:
+                (cycle_dir / "rendered_map.jpg").write_bytes(base64.b64decode(image_b64))
+            # Save prompts and response
+            (cycle_dir / "prompt.json").write_text(json.dumps({
+                "system_prompt": system_prompt,
+                "user_prompt": user_prompt,
+                "scene": scene,
+            }, indent=2))
+            (cycle_dir / "response.json").write_text(json.dumps({
+                "raw": raw_response,
+                "parsed": parsed,
+                "error": error,
+            }, indent=2))
+            # Append to index
+            entry = {
+                "cycle": cycle_id,
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "model": model,
+                "provider": provider,
+                "latency_sec": round(latency_sec, 2),
+                "error": error,
+                "has_tool_calls": bool(parsed and parsed.get("tool_calls")),
+            }
+            index_path = self._log_dir / "index.json"
+            try:
+                index = json.loads(index_path.read_text())
+            except (json.JSONDecodeError, FileNotFoundError):
+                index = []
+            index.append(entry)
+            index_path.write_text(json.dumps(index, indent=2))
+        except OSError as exc:
+            self.get_logger().warn(f"Failed to write VLM log: {exc}")
+
     def _replan_tick(self):
         if not self._vlm_enabled:
             return
@@ -235,6 +299,15 @@ class VLMCoordinatorNode(Node):
         scene = self._build_scene()
         if scene is None:
             return
+        # Block VLM until map has meaningful free space (Cartographer needs time to start)
+        map_info = scene.get("map_info", {})
+        free_cells = int(map_info.get("free_cells", 0))
+        if free_cells < 200:
+            self.get_logger().info(
+                f"Map not ready ({free_cells} free cells < 200), skipping VLM call",
+                throttle_duration_sec=10.0,
+            )
+            return
         fingerprint = self._scene_fingerprint(scene)
         if fingerprint == self._last_scene_fingerprint:
             return
@@ -244,12 +317,13 @@ class VLMCoordinatorNode(Node):
             return
 
         model = self._resolved_model_name(provider)
-        system_prompt = build_system_prompt()
+        system_prompt = build_system_prompt(mission=self._mission_prompt)
         user_prompt = build_user_prompt(scene)
         self._pending_error = None
         self._pending_result = None
 
         def _worker():
+            t0 = time.monotonic()
             try:
                 raw = query_vlm(
                     provider=provider,
@@ -261,14 +335,25 @@ class VLMCoordinatorNode(Node):
                     max_tokens=self._vlm_max_tokens,
                     timeout_sec=self._vlm_timeout_sec,
                 )
+                latency = time.monotonic() - t0
                 parsed = extract_json_object(raw)
                 with self._worker_lock:
-                    self._pending_result = {"raw": raw, "parsed": parsed}
+                    self._pending_result = {
+                        "raw": raw, "parsed": parsed,
+                        "system_prompt": system_prompt, "user_prompt": user_prompt,
+                        "scene": scene, "image_b64": image_b64,
+                        "model": model, "provider": provider, "latency_sec": latency,
+                    }
                     self._pending_fingerprint = fingerprint
             except VLMBackendError as exc:
+                latency = time.monotonic() - t0
                 with self._worker_lock:
                     self._pending_error = str(exc)
                     self._pending_fingerprint = fingerprint
+                self._log_cycle(
+                    system_prompt, user_prompt, scene, image_b64,
+                    model, provider, None, None, str(exc), latency,
+                )
 
         self._worker = threading.Thread(target=_worker, daemon=True)
         self._worker.start()
@@ -291,6 +376,15 @@ class VLMCoordinatorNode(Node):
 
         parsed = result.get("parsed")
         raw = str(result.get("raw", ""))
+
+        # Log full cycle to disk
+        self._log_cycle(
+            result.get("system_prompt", ""), result.get("user_prompt", ""),
+            result.get("scene", {}), result.get("image_b64"),
+            result.get("model", ""), result.get("provider", ""),
+            raw, parsed, None, result.get("latency_sec", 0.0),
+        )
+
         if parsed is None:
             self.get_logger().warn(f"VLM response was not valid JSON: {raw[:240]}")
             self._last_scene_fingerprint = fingerprint

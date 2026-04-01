@@ -10,7 +10,7 @@ from .recovery import RecoveryManager
 from .state import TickResult
 
 
-class ReactiveNavCoordinator:
+class DefaultNavCoordinator:
     def __init__(self, cfg) -> None:
         self.cfg = cfg
         self.scan_analyzer = ScanAnalyzer()

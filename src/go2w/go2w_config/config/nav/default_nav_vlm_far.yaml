@@ -1,7 +1,7 @@
 /**:
   ros__parameters:
     # VLM FAR exploration variant.
-    # Based on reactive_nav_single_go2w.yaml with tuning for:
+    # Based on default_nav_single_go2w.yaml with tuning for:
     #   - No settle gate (SLAM startup gate handles it)
     #   - Wider obstacle margins (FAR plans longer paths through corridors)
     #   - Lower min speed ratio (fine-grained slow approach)

@@ -21,7 +21,7 @@
 - Planner scan output: `/<ns>/scan_3d` (published by planner-owned pointcloud projection).
 - Local map output: `/<ns>/map` (published by `go2_nav_algorithms/simple_scan_mapper_cpp`).
 - Navigation odometry input: `/<ns>/odom/nav` (published by `go2_gazebo_sim/scripts/slam/slam_odom_relay.py`).
-- Velocity source of truth: `/<ns>/cmd_vel_stamped` from `go2_gazebo_sim/scripts/control/reactive_nav.py`.
+- Velocity source of truth: `/<ns>/cmd_vel_stamped` from `go2_gazebo_sim/scripts/control/default_nav.py`.
 - Real-robot velocity arbitration output: root `/cmd_vel` (published by `go2_gazebo_sim/scripts/control/cmd_vel_activity_mux.py`).
 - M-TARE marker source: `/<ns>/mtare_goal_marker` from `mtare_ros2/mtare_coordinator.py`.
 

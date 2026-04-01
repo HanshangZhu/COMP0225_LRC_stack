@@ -56,7 +56,7 @@ def classify(tag: str, message: str) -> str:
         return "FRONTIER"
     if any(k in tag_n for k in ("async_grid_mppi_nav", "controller_server", "behavior_server", "lifecycle_manager_navigation")):
         return "PLAN" if "async_grid_mppi_nav" in tag_n else "NAV"
-    if "reactive_nav" in tag_n:
+    if "default_nav" in tag_n:
         if any(k in msg for k in ("grid planner", "planned_", "plan_wps", "planner_mode", "a*", "d* lite", "goal update", "new goal")):
             return "PLAN"
         return "NAV"

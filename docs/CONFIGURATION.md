@@ -10,8 +10,8 @@ All configuration files, Gazebo worlds, SLAM backends, and validation commands.
 | `src/go2_nav_algorithms/config/nav/geometric_frontier_single.yaml` | Frontier detection parameters |
 | `src/go2_nav_algorithms/config/gbplanner2_single.yaml` | GBPlanner2 single-robot params |
 | `src/go2_nav_algorithms/config/gbplanner2_dual.yaml` | GBPlanner2 dual-robot params |
-| `src/go2w_control/config/reactive_nav_single_go2w.yaml` | Navigation speeds, planner params (sim) |
-| `src/go2w_control/config/reactive_nav_real_go2w.yaml` | Navigation params (real robot — slower, wider margins) |
+| `src/go2w_control/config/default_nav_single_go2w.yaml` | Navigation speeds, planner params (sim) |
+| `src/go2w_control/config/default_nav_real_go2w.yaml` | Navigation params (real robot — slower, wider margins) |
 | `src/go2w_control/config/go2w_hybrid_motion.yaml` | Wheel/leg mode blending |
 | `src/go2_gazebo_sim/config/ros_control/ros_control_go2w_robot.yaml` | ros2_control joints + controller_manager rate |
 | `src/go2_gazebo_sim/urdf/go2w/go2w_description_3d_lidar.xacro` | Full robot URDF with sensors |
@@ -43,7 +43,7 @@ Fast-LIO provides motion-undistorted point clouds (`cloud_registered_body`) that
 After launch, verify nodes are running:
 
 ```bash
-ros2 node list | grep -E "cfpa2|reactive_nav|simple_scan_mapper"
+ros2 node list | grep -E "cfpa2|default_nav|simple_scan_mapper"
 ros2 topic hz /robot/scan_3d        # expect ~10 Hz
 ros2 topic hz /robot/odom/nav       # expect ~50 Hz
 ros2 topic hz /robot/map            # expect ~4 Hz

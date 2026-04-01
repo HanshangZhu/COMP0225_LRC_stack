@@ -27,13 +27,13 @@ def build_wall_checker_node(ns: str | None, use_sim_time, extra_params=None, rem
     return Node(**kwargs)
 
 
-def build_reactive_nav_node(
+def build_default_nav_node(
     ns: str | None,
     use_sim_time,
     profile: str,
     extra_params=None,
     remappings=None,
-    name: str = "reactive_nav",
+    name: str = "default_nav",
 ):
     params = [
         nav_profile_path(profile),
@@ -44,7 +44,7 @@ def build_reactive_nav_node(
 
     kwargs = {
         "package": "go2w_nav",
-        "executable": "reactive_nav.py",
+        "executable": "default_nav.py",
         "name": name,
         "parameters": params,
         "output": "screen",

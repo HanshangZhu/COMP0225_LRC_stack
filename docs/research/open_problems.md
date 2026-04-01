@@ -41,7 +41,7 @@
 ## 4) Navigation stack remains in `no_goal` / startup loops (Isaac)
 - Status: unresolved
 - Symptom:
-  - `reactive_nav`: `mode=no_goal` with zero cmd output.
+  - `default_nav`: `mode=no_goal` with zero cmd output.
   - `simple_frontier_explorer`: repeated stale costmap fallback.
 - Working hypothesis:
   - Upstream sensing quality (point cloud structure/density) is insufficient, so costmap/frontier pipeline never stabilizes.

@@ -245,6 +245,96 @@
       </link>
     </model>
 
+    <!-- === RED BLOCKS (10cm cubes) — scattered artifact targets === -->
+    <!-- Room A: tucked against north wall -->
+    <model name="red_block_1">
+      <static>true</static>
+      <pose>1.8 3.5 0.05 0 0 0.4</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.1 0.1 0.1</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.1 0.1 0.1</size></box></geometry>
+          <material><ambient>0.8 0.0 0.0 1</ambient><diffuse>1.0 0.05 0.05 1</diffuse><specular>0.3 0.1 0.1 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <!-- Room A: floor center -->
+    <model name="red_block_2">
+      <static>true</static>
+      <pose>3.2 1.8 0.05 0 0 0.9</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.1 0.1 0.1</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.1 0.1 0.1</size></box></geometry>
+          <material><ambient>0.8 0.0 0.0 1</ambient><diffuse>1.0 0.05 0.05 1</diffuse><specular>0.3 0.1 0.1 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <!-- Room B: near green marker 2 -->
+    <model name="red_block_3">
+      <static>true</static>
+      <pose>8.0 3.0 0.05 0 0 0.2</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.1 0.1 0.1</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.1 0.1 0.1</size></box></geometry>
+          <material><ambient>0.8 0.0 0.0 1</ambient><diffuse>1.0 0.05 0.05 1</diffuse><specular>0.3 0.1 0.1 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <!-- Room B: east corner -->
+    <model name="red_block_4">
+      <static>true</static>
+      <pose>11.2 1.5 0.05 0 0 1.1</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.1 0.1 0.1</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.1 0.1 0.1</size></box></geometry>
+          <material><ambient>0.8 0.0 0.0 1</ambient><diffuse>1.0 0.05 0.05 1</diffuse><specular>0.3 0.1 0.1 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <!-- Corridor: on the floor mid-passage -->
+    <model name="red_block_5">
+      <static>true</static>
+      <pose>4.5 0.3 0.05 0 0 0.0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.1 0.1 0.1</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.1 0.1 0.1</size></box></geometry>
+          <material><ambient>0.8 0.0 0.0 1</ambient><diffuse>1.0 0.05 0.05 1</diffuse><specular>0.3 0.1 0.1 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <!-- Room C/D south: near box_obstacle_1 -->
+    <model name="red_block_6">
+      <static>true</static>
+      <pose>3.5 -3.0 0.05 0 0 0.6</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.1 0.1 0.1</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.1 0.1 0.1</size></box></geometry>
+          <material><ambient>0.8 0.0 0.0 1</ambient><diffuse>1.0 0.05 0.05 1</diffuse><specular>0.3 0.1 0.1 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <!-- Room D: far east -->
+    <model name="red_block_7">
+      <static>true</static>
+      <pose>10.5 -3.2 0.05 0 0 1.5</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.1 0.1 0.1</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.1 0.1 0.1</size></box></geometry>
+          <material><ambient>0.8 0.0 0.0 1</ambient><diffuse>1.0 0.05 0.05 1</diffuse><specular>0.3 0.1 0.1 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <!-- Room C: west side -->
+    <model name="red_block_8">
+      <static>true</static>
+      <pose>1.2 -2.0 0.05 0 0 0.8</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.1 0.1 0.1</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.1 0.1 0.1</size></box></geometry>
+          <material><ambient>0.8 0.0 0.0 1</ambient><diffuse>1.0 0.05 0.05 1</diffuse><specular>0.3 0.1 0.1 1</specular></material>
+        </visual>
+      </link>
+    </model>
+
     <gravity>0 0 -9.8</gravity>
     <magnetic_field>6e-06 2.3e-05 -4.2e-05</magnetic_field>
     <atmosphere type="adiabatic" />

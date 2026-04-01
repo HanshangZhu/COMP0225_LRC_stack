@@ -133,12 +133,12 @@ def _build_frontier_node(
     )
 
 
-def _build_reactive_nav_node(
+def _build_default_nav_node(
     *,
     use_sim_time: bool,
     use_legacy_yaml_fallback: bool,
     legacy_reactive_yaml: str,
-    reactive_nav_params: dict[str, Any],
+    default_nav_params: dict[str, Any],
     nav_odom_topic: str,
     planning_scan_topic: str,
 ) -> Node:
@@ -146,7 +146,7 @@ def _build_reactive_nav_node(
     if use_legacy_yaml_fallback:
         params.append(legacy_reactive_yaml)
     params.append({"use_sim_time": use_sim_time})
-    params.append(copy.deepcopy(reactive_nav_params))
+    params.append(copy.deepcopy(default_nav_params))
     params.append(
         {
             "frontier_replan_topic": f"/{ROBOT_NS}/frontier_replan",
@@ -156,9 +156,9 @@ def _build_reactive_nav_node(
 
     return Node(
         package="go2_gazebo_sim",
-        executable="reactive_nav.py",
+        executable="default_nav.py",
         namespace=ROBOT_NS,
-        name="reactive_nav",
+        name="default_nav",
         parameters=params,
         remappings=[
             ("/way_point", f"/{ROBOT_NS}/way_point_coord"),
@@ -297,7 +297,7 @@ def _launch_setup(context):
     global_planner_id = LaunchConfiguration("global_planner_id").perform(context).strip()
 
     legacy_frontier_yaml = os.path.join(pkg, "config", "nav", "geometric_frontier_dual.yaml")
-    legacy_reactive_yaml = os.path.join(pkg, "config", "nav", "reactive_nav_dual.yaml")
+    legacy_reactive_yaml = os.path.join(pkg, "config", "nav", "default_nav_dual.yaml")
 
     mapping_overrides = {
         "max_scan_odom_dt": _optional_float(LaunchConfiguration("max_scan_odom_dt").perform(context)),
@@ -306,15 +306,15 @@ def _launch_setup(context):
         "mapper_update_rate": _optional_float(LaunchConfiguration("mapper_update_rate").perform(context)),
         "frontier_update_rate": _optional_float(LaunchConfiguration("frontier_update_rate").perform(context)),
     }
-    reactive_nav_overrides = {
-        "max_linear_speed": _optional_float(LaunchConfiguration("reactive_nav_max_linear_speed").perform(context)),
-        "obstacle_slow_dist": _optional_float(LaunchConfiguration("reactive_nav_obstacle_slow_dist").perform(context)),
-        "obstacle_stop_dist": _optional_float(LaunchConfiguration("reactive_nav_obstacle_stop_dist").perform(context)),
-        "planner_grid_radius": _optional_float(LaunchConfiguration("reactive_nav_planner_grid_radius").perform(context)),
+    default_nav_overrides = {
+        "max_linear_speed": _optional_float(LaunchConfiguration("default_nav_max_linear_speed").perform(context)),
+        "obstacle_slow_dist": _optional_float(LaunchConfiguration("default_nav_obstacle_slow_dist").perform(context)),
+        "obstacle_stop_dist": _optional_float(LaunchConfiguration("default_nav_obstacle_stop_dist").perform(context)),
+        "planner_grid_radius": _optional_float(LaunchConfiguration("default_nav_planner_grid_radius").perform(context)),
         "planner_goal_clip_distance": _optional_float(
-            LaunchConfiguration("reactive_nav_planner_goal_clip_distance").perform(context)
+            LaunchConfiguration("default_nav_planner_goal_clip_distance").perform(context)
         ),
-        "wall_scan_enabled": _optional_bool(LaunchConfiguration("reactive_nav_wall_scan_enabled").perform(context)),
+        "wall_scan_enabled": _optional_bool(LaunchConfiguration("default_nav_wall_scan_enabled").perform(context)),
     }
 
     pipeline_runtime = load_pipeline_runtime(
@@ -324,14 +324,14 @@ def _launch_setup(context):
         global_planner_id=global_planner_id,
         use_legacy_yaml_fallback=use_legacy_yaml_fallback,
         legacy_frontier_yaml=legacy_frontier_yaml,
-        legacy_reactive_nav_yaml=legacy_reactive_yaml,
+        legacy_default_nav_yaml=legacy_reactive_yaml,
         mapping_overrides=mapping_overrides,
-        reactive_nav_overrides=reactive_nav_overrides,
+        default_nav_overrides=default_nav_overrides,
     )
 
     selected_ids = pipeline_runtime["selected_ids"]
     mapping_params = pipeline_runtime["mapping_params"]
-    reactive_nav_params = pipeline_runtime["reactive_nav_params"]
+    default_nav_params = pipeline_runtime["default_nav_params"]
     frontier_module = pipeline_runtime["frontier_module"]
     goal_assigner_module = pipeline_runtime["goal_assigner_module"]
     global_planner_module = pipeline_runtime["global_planner_module"]
@@ -349,12 +349,12 @@ def _launch_setup(context):
         f"odom_history_sec={mapping_params.get('odom_history_sec')}, "
         f"mapper_update_rate={mapping_params.get('mapper_update_rate')}, "
         f"frontier_update_rate={mapping_params.get('frontier_update_rate')}) "
-        f"reactive_nav(max_linear_speed={reactive_nav_params.get('max_linear_speed')}, "
-        f"obstacle_slow_dist={reactive_nav_params.get('obstacle_slow_dist')}, "
-        f"obstacle_stop_dist={reactive_nav_params.get('obstacle_stop_dist')}, "
-        f"planner_grid_radius={reactive_nav_params.get('planner_grid_radius')}, "
-        f"planner_goal_clip_distance={reactive_nav_params.get('planner_goal_clip_distance')}, "
-        f"wall_scan_enabled={reactive_nav_params.get('wall_scan_enabled')})"
+        f"default_nav(max_linear_speed={default_nav_params.get('max_linear_speed')}, "
+        f"obstacle_slow_dist={default_nav_params.get('obstacle_slow_dist')}, "
+        f"obstacle_stop_dist={default_nav_params.get('obstacle_stop_dist')}, "
+        f"planner_grid_radius={default_nav_params.get('planner_grid_radius')}, "
+        f"planner_goal_clip_distance={default_nav_params.get('planner_goal_clip_distance')}, "
+        f"wall_scan_enabled={default_nav_params.get('wall_scan_enabled')})"
     )
 
     tf_remaps = [("/tf", f"/{ROBOT_NS}/tf"), ("/tf_static", f"/{ROBOT_NS}/tf_static")]
@@ -542,11 +542,11 @@ def _launch_setup(context):
         remappings=[("/way_point", f"/{ROBOT_NS}/way_point_coord"), ("/joy", f"/{ROBOT_NS}/joy")],
     )
 
-    reactive_nav_node = _build_reactive_nav_node(
+    default_nav_node = _build_default_nav_node(
         use_sim_time=use_sim_time,
         use_legacy_yaml_fallback=use_legacy_yaml_fallback,
         legacy_reactive_yaml=legacy_reactive_yaml,
-        reactive_nav_params=reactive_nav_params,
+        default_nav_params=default_nav_params,
         nav_odom_topic=nav_odom_topic,
         planning_scan_topic=planning_scan_topic,
     )
@@ -612,7 +612,7 @@ def _launch_setup(context):
                 goal_assigner_node,
                 global_planner_node,
                 autonomy_enabler_node,
-                reactive_nav_node,
+                default_nav_node,
                 status_monitor_node,
                 readiness_gate_node,
                 rviz_node,
@@ -713,7 +713,7 @@ def generate_launch_description():
             "kill_pattern '/go2_nav_algorithms/lib/go2_nav_algorithms/simple_scan_mapper_cpp'; "
             "kill_pattern '/go2_issac_stack/lib/go2_issac_stack/simple_frontier_explorer.py'; "
             "kill_pattern '/go2_gazebo_sim/lib/go2_gazebo_sim/geometric_frontier.py'; "
-            "kill_pattern '/go2_gazebo_sim/lib/go2_gazebo_sim/reactive_nav.py'; "
+            "kill_pattern '/go2_gazebo_sim/lib/go2_gazebo_sim/default_nav.py'; "
             "kill_pattern '/go2_gazebo_sim/lib/go2_gazebo_sim/autonomy_enabler.py'; "
             "kill_pattern '/go2_gazebo_sim/lib/go2_gazebo_sim/twist_bridge.py'; "
             "kill_pattern '/go2_gazebo_sim/lib/go2_gazebo_sim/qos_bridge.py'; "
@@ -836,12 +836,12 @@ def generate_launch_description():
             DeclareLaunchArgument("odom_history_sec", default_value=""),
             DeclareLaunchArgument("mapper_update_rate", default_value=""),
             DeclareLaunchArgument("frontier_update_rate", default_value=""),
-            DeclareLaunchArgument("reactive_nav_max_linear_speed", default_value=""),
-            DeclareLaunchArgument("reactive_nav_obstacle_slow_dist", default_value=""),
-            DeclareLaunchArgument("reactive_nav_obstacle_stop_dist", default_value=""),
-            DeclareLaunchArgument("reactive_nav_planner_grid_radius", default_value=""),
-            DeclareLaunchArgument("reactive_nav_planner_goal_clip_distance", default_value=""),
-            DeclareLaunchArgument("reactive_nav_wall_scan_enabled", default_value=""),
+            DeclareLaunchArgument("default_nav_max_linear_speed", default_value=""),
+            DeclareLaunchArgument("default_nav_obstacle_slow_dist", default_value=""),
+            DeclareLaunchArgument("default_nav_obstacle_stop_dist", default_value=""),
+            DeclareLaunchArgument("default_nav_planner_grid_radius", default_value=""),
+            DeclareLaunchArgument("default_nav_planner_goal_clip_distance", default_value=""),
+            DeclareLaunchArgument("default_nav_wall_scan_enabled", default_value=""),
             DeclareLaunchArgument("enable_goal_assigner", default_value="true"),
             DeclareLaunchArgument("use_shared_map", default_value="false"),
             DeclareLaunchArgument("shared_map_topic", default_value="/disco_slam/global_map"),

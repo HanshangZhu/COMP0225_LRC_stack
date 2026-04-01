@@ -48,6 +48,7 @@ def _launch_setup(context):
     florence2_detection_rate = float(_get(context, "florence2_detection_rate"))
     florence2_grounding_rate = float(_get(context, "florence2_grounding_rate"))
     vlm_model = _get(context, "vlm_model").strip()
+    mission_prompt = _get(context, "mission_prompt").strip()
     vlm_replan_sec = float(_get(context, "vlm_replan_sec"))
     vlm_goal_timeout_sec = float(_get(context, "vlm_goal_timeout_sec"))
     vlm_delay = float(_get(context, "vlm_delay"))
@@ -55,6 +56,7 @@ def _launch_setup(context):
     skeleton_rate = float(_get(context, "vlm_skeleton_rate"))
     renderer_rate = float(_get(context, "vlm_renderer_rate"))
     green_rate = float(_get(context, "vlm_green_rate"))
+    enable_3d_viz = _as_bool(_get(context, "enable_3d_viz"))
     checker_enabled = _as_bool(_get(context, "checker_enabled"))
     checker_deadline_sec = float(_get(context, "checker_deadline_sec"))
     checker_coverage_pass_pct = float(_get(context, "checker_coverage_pass_pct"))
@@ -104,10 +106,10 @@ def _launch_setup(context):
         raise ValueError(
             f"map_backend '{map_backend}' requires slam_source=cartographer in this launch"
         )
-    if nav_execution_backend not in {"far", "reactive", "mppi"}:
+    if nav_execution_backend not in {"far", "reactive", "rrt_star", "far_rrt_star", "mppi"}:
         raise ValueError(
             "Unsupported nav_execution_backend "
-            f"'{nav_execution_backend}' (expected far, reactive or mppi)"
+            f"'{nav_execution_backend}' (expected far, reactive, rrt_star, far_rrt_star or mppi)"
         )
     if frontier_backend not in {"cfpa2", "simple_frontier"}:
         raise ValueError(
@@ -129,7 +131,10 @@ def _launch_setup(context):
     #    ground_truth mode: base launch runs gt_odom_relay directly from p3d GT.
     single_launch = os.path.join(go2_gazebo_pkg, "launch", "single_go2w_gazebo_cfpa2.launch.py")
     go2w_config_pkg = get_package_share_directory("go2w_config")
-    nav_config_path = os.path.join(go2w_config_pkg, "config", "nav", "reactive_nav_vlm_far.yaml")
+    if nav_execution_backend in {"reactive", "rrt_star", "far_rrt_star"}:
+        nav_config_path = os.path.join(go2w_config_pkg, "config", "nav", "reactive_nav_vlm.yaml")
+    else:
+        nav_config_path = os.path.join(go2w_config_pkg, "config", "nav", "default_nav_vlm_far.yaml")
 
     # FAR terrain analysis needs map-frame 3D cloud.
     # - Fast-LIO: registered_scan_reliable is already in map frame.
@@ -164,7 +169,7 @@ def _launch_setup(context):
         "cfpa2_w_momentum": _get(context, "cfpa2_w_momentum"),
         "cfpa2_min_utility": _get(context, "cfpa2_min_utility"),
         # FAR planner backend
-        "nav_backend": nav_execution_backend if nav_execution_backend == "far" else "reactive",
+        "nav_backend": nav_execution_backend if nav_execution_backend in {"far", "rrt_star", "far_rrt_star"} else "reactive",
         "registered_scan_topic": far_scan_topic,
         "far_max_speed": "0.5",
         "far_robot_id": "0",
@@ -240,7 +245,7 @@ def _launch_setup(context):
         # NOTE:
         # We do not use Cartographer's occupancy grid by default for VLM exploration.
         # In this stack its 3D projected map tends to be "occupied + unknown" with
-        # almost no explicit free cells, so CFPA2/reactive_nav cannot extract
+        # almost no explicit free cells, so CFPA2/default_nav cannot extract
         # frontiers or plan from it reliably. We keep Cartographer for pose/TF, and
         # use simple_scan_mapper_cpp by default to build a proper free/occupied/unknown
         # 2D exploration map from scan_3d + Cartographer pose.
@@ -275,7 +280,7 @@ def _launch_setup(context):
                         {"input_topic": f"/{robot_ns}/map_prob"},
                         {"output_topic": f"/{robot_ns}/map"},
                         {"free_threshold": 25},
-                        {"occupied_threshold": 50},
+                        {"occupied_threshold": 65},
                         {"min_occupied_component_cells": 2},
                         {"fill_holes": True},
                         {"hole_neighbor_threshold": 7},
@@ -391,7 +396,7 @@ def _launch_setup(context):
 
         # pointcloud_frame_bridge: transform registered_scan from livox_mid360 to map
         # frame for FAR terrain analysis (terrainAnalysis/localPlanner assume map-frame input).
-        if nav_execution_backend == "far":
+        if nav_execution_backend in {"far", "far_rrt_star"}:
             carto_nodes.append(
                 Node(
                     package="go2w_perception",
@@ -442,6 +447,52 @@ def _launch_setup(context):
             TimerAction(
                 period=max(0.0, slam_stack_start_delay),
                 actions=carto_nodes,
+            )
+        )
+
+    # ── 2b. OctoMap 3D visualization (parallel, viz-only) ─────────
+    #   Runs a separate OctoMap server on the sensor-frame cloud for 3D
+    #   RViz visualization while the 2D pipeline handles nav.
+    if enable_3d_viz and map_backend != "octomap":
+        viz_cloud_topic = f"/{robot_ns}/registered_scan_reliable"
+        actions.append(
+            TimerAction(
+                period=max(0.0, slam_stack_start_delay) + 5.0,
+                actions=[
+                    Node(
+                        package="octomap_server",
+                        executable="octomap_server_node",
+                        name="octomap_3d_viz",
+                        namespace=robot_ns,
+                        parameters=[{
+                            "use_sim_time": use_sim_time,
+                            "resolution": 0.08,
+                            "frame_id": mapper_frame,
+                            "base_frame_id": "base_link",
+                            "sensor_model.max_range": 8.0,
+                            "sensor_model.hit": 0.65,
+                            "sensor_model.miss": 0.35,
+                            "sensor_model.min": 0.12,
+                            "sensor_model.max": 0.97,
+                            "point_cloud_min_z": -0.5,
+                            "point_cloud_max_z": 1.5,
+                            "occupancy_min_z": -0.10,
+                            "occupancy_max_z": 1.20,
+                            "filter_ground_plane": False,
+                            "incremental_2D_projection": False,
+                            "publish_free_space": True,
+                            "use_height_map": False,
+                            "compress_map": True,
+                            "latch": False,
+                            "filter_speckles": True,
+                        }],
+                        remappings=tf_remaps + [
+                            ("cloud_in", viz_cloud_topic),
+                            ("projected_map", f"/{robot_ns}/octomap_viz/projected_map"),
+                        ],
+                        output="screen",
+                    )
+                ],
             )
         )
 
@@ -543,6 +594,35 @@ def _launch_setup(context):
         )
     )
 
+    vlm_nodes.append(
+        Node(
+            package="vlm_explorer",
+            executable="red_block_detector_node",
+            name="red_block_detector",
+            parameters=[
+                {"use_sim_time": use_sim_time},
+                {
+                    "robot_namespaces": [robot_ns],
+                    "detections_topic": "/vlm/artifact_detections",
+                    "rate": 2.0,
+                    "hsv_h_low1": 0,
+                    "hsv_h_high1": 10,
+                    "hsv_h_low2": 170,
+                    "hsv_h_high2": 180,
+                    "hsv_s_low": 100,
+                    "hsv_v_low": 80,
+                    "min_blob_pixels": 50,
+                    "assumed_depth_m": 2.0,
+                    "camera_hfov_rad": 2.0944,
+                    "dedup_radius_m": 0.8,
+                    "marker_topic": "/vlm/artifact_markers",
+                    "marker_frame_id": mapper_frame,
+                },
+            ],
+            output="screen",
+        )
+    )
+
     if florence2_enabled:
         vlm_nodes.append(
             Node(
@@ -593,6 +673,7 @@ def _launch_setup(context):
                     "vlm_max_tokens": 1024,
                     "vlm_max_retries": 3,
                     "green_reach_radius_m": 1.0,
+                    "mission_prompt": mission_prompt,
                 },
             ],
             output="screen",
@@ -691,7 +772,12 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument("florence2_detection_rate", default_value="2.0"),
             DeclareLaunchArgument("florence2_grounding_rate", default_value="1.0"),
-            DeclareLaunchArgument("vlm_replan_sec", default_value="20.0"),
+            DeclareLaunchArgument(
+                "mission_prompt",
+                default_value="",
+                description="Vague user mission for VLM coordinator (e.g. 'find small colored objects').",
+            ),
+            DeclareLaunchArgument("vlm_replan_sec", default_value="10.0"),
             DeclareLaunchArgument("vlm_goal_timeout_sec", default_value="2.0"),
             DeclareLaunchArgument(
                 "nav_execution_backend",
@@ -715,12 +801,17 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "slam_stack_start_delay",
-                default_value="30.0",
-                description="Delay before starting Cartographer/carto_odom_bridge.",
+                default_value="8.0",
+                description="Delay before starting Cartographer/carto_odom_bridge (after platform ready gate).",
             ),
             DeclareLaunchArgument("vlm_skeleton_rate", default_value="0.5"),
             DeclareLaunchArgument("vlm_renderer_rate", default_value="0.5"),
             DeclareLaunchArgument("vlm_green_rate", default_value="1.0"),
+            DeclareLaunchArgument(
+                "enable_3d_viz",
+                default_value="true",
+                description="Run a parallel OctoMap server for 3D RViz visualization (ignored when map_backend=octomap).",
+            ),
             DeclareLaunchArgument("checker_enabled", default_value="true"),
             DeclareLaunchArgument("checker_deadline_sec", default_value="220.0"),
             DeclareLaunchArgument("checker_coverage_pass_pct", default_value="95.0"),

@@ -21,7 +21,7 @@ DEFAULT_MAPPING_PARAMS = {
     "frontier_update_rate": 2.0,
 }
 
-DEFAULT_REACTIVE_NAV_PARAMS = {
+DEFAULT_NAV_PARAMS = {
     "max_linear_speed": 0.28,
     "obstacle_slow_dist": 0.85,
     "obstacle_stop_dist": 0.40,
@@ -227,9 +227,9 @@ def load_pipeline_runtime(
     global_planner_id: str,
     use_legacy_yaml_fallback: bool,
     legacy_frontier_yaml: str,
-    legacy_reactive_nav_yaml: str,
+    legacy_default_nav_yaml: str,
     mapping_overrides: dict[str, Any] | None = None,
-    reactive_nav_overrides: dict[str, Any] | None = None,
+    default_nav_overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not pipeline_config_json:
         raise ValueError("pipeline_config_json must be set")
@@ -255,20 +255,20 @@ def load_pipeline_runtime(
     navigation = config.setdefault("navigation", {})
     if not isinstance(navigation, dict):
         raise ValueError("navigation must be an object")
-    reactive_nav = navigation.setdefault("reactive_nav", {})
-    if not isinstance(reactive_nav, dict):
-        raise ValueError("navigation.reactive_nav must be an object")
-    reactive_nav_params = reactive_nav.setdefault("params", {})
-    if not isinstance(reactive_nav_params, dict):
-        raise ValueError("navigation.reactive_nav.params must be an object")
+    default_nav = navigation.setdefault("default_nav", {})
+    if not isinstance(default_nav, dict):
+        raise ValueError("navigation.default_nav must be an object")
+    default_nav_params = default_nav.setdefault("params", {})
+    if not isinstance(default_nav_params, dict):
+        raise ValueError("navigation.default_nav.params must be an object")
 
     _merge_missing(mapping_params, DEFAULT_MAPPING_PARAMS)
-    _merge_missing(reactive_nav_params, DEFAULT_REACTIVE_NAV_PARAMS)
+    _merge_missing(default_nav_params, DEFAULT_NAV_PARAMS)
 
     fallback_sources: list[str] = []
     if use_legacy_yaml_fallback:
         legacy_frontier_params = _load_ros_params_yaml(legacy_frontier_yaml)
-        legacy_reactive_nav_params = _load_ros_params_yaml(legacy_reactive_nav_yaml)
+        legacy_default_nav_params = _load_ros_params_yaml(legacy_default_nav_yaml)
 
         if legacy_frontier_params:
             fallback_sources.append(legacy_frontier_yaml)
@@ -279,9 +279,9 @@ def load_pipeline_runtime(
                 params = frontier_mod.setdefault("params", {})
                 if isinstance(params, dict):
                     _merge_missing(params, legacy_frontier_params)
-        if legacy_reactive_nav_params:
-            fallback_sources.append(legacy_reactive_nav_yaml)
-            _merge_missing(reactive_nav_params, legacy_reactive_nav_params)
+        if legacy_default_nav_params:
+            fallback_sources.append(legacy_default_nav_yaml)
+            _merge_missing(default_nav_params, legacy_default_nav_params)
 
     defaults = config["defaults"]
     selected_frontier_id = frontier_planner_id or str(defaults.get("frontier_planner_id", ""))
@@ -304,7 +304,7 @@ def load_pipeline_runtime(
     global_planner_module = _resolve_module(global_planner_map, selected_global_planner_id, "global_planner_id")
 
     resolved_mapping_params = _merge_overrides(mapping_params, mapping_overrides)
-    resolved_reactive_nav_params = _merge_overrides(reactive_nav_params, reactive_nav_overrides)
+    resolved_default_nav_params = _merge_overrides(default_nav_params, default_nav_overrides)
 
     return {
         "raw": config,
@@ -317,7 +317,7 @@ def load_pipeline_runtime(
         "goal_assigner_module": goal_assigner_module,
         "global_planner_module": global_planner_module,
         "mapping_params": resolved_mapping_params,
-        "reactive_nav_params": resolved_reactive_nav_params,
+        "default_nav_params": resolved_default_nav_params,
         "fallback_sources": fallback_sources,
         "valid_ids": {
             "frontier_planner_ids": sorted(frontier_map.keys()),

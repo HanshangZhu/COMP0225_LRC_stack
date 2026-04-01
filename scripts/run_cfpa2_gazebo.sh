@@ -60,7 +60,7 @@ if [[ "${CLEANUP_STALE_GAZEBO:-1}" == "1" ]]; then
     '/go2_nav_algorithms/lib/go2_nav_algorithms/simple_frontier_explorer.py'
     '/go2w_observability/lib/go2w_observability/dual_map_coverage_visualizer.py'
     '/go2_gazebo_sim/lib/go2_gazebo_sim/shared_map_fuser.py'
-    '/go2w_control/lib/go2w_control/reactive_nav.py'
+    '/go2w_control/lib/go2w_control/default_nav.py'
     '/go2w_control/lib/go2w_control/autonomy_enabler.py'
     '/go2w_perception/lib/go2w_perception/twist_bridge.py'
     '/go2w_control/lib/go2w_control/go2w_hybrid_cmd_router.py'

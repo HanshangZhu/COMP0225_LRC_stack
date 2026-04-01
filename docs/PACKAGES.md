@@ -8,7 +8,7 @@ All packages live under `src/`. Grouped by function.
 
 | Package | Path | Description |
 |---|---|---|
-| **go2_nav_algorithms** | `src/go2_nav_algorithms/` | Custom navigation: `simple_scan_mapper_cpp` (2D occupancy grid from LaserScan + TF), `reactive_nav` (A* global + local obstacle avoidance), `geometric_frontier_explorer` |
+| **go2_nav_algorithms** | `src/go2_nav_algorithms/` | Custom navigation: `simple_scan_mapper_cpp` (2D occupancy grid from LaserScan + TF), `default_nav` (A* global + local obstacle avoidance), `geometric_frontier_explorer` |
 | **cfpa2_collaborative_autonomy** | `src/cfpa2_collaborative_autonomy/` | Burgard-style CFPA2 multi-robot coordinator. Assigns frontiers to robots using utility = info-gain − cost + momentum |
 | **go2_tare_planner_ros2** | `src/go2_tare_planner_ros2/` | TARE exploration planner (single robot), ROS 2 port. Contains both generated and upstream variants |
 | **mtare_ros2** | `src/mtare_ros2/` | M-TARE multi-robot exploration coordinator (ROS 2 native, alternative to CFPA2) |

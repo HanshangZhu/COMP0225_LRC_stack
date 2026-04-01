@@ -60,7 +60,7 @@ if [[ "${CLEANUP_STALE_GAZEBO:-1}" == "1" ]]; then
     '/go2_nav_algorithms/lib/go2_nav_algorithms/simple_frontier_explorer.py'
     '/go2w_observability/lib/go2w_observability/dual_map_coverage_visualizer.py'
     '/go2_gazebo_sim/lib/go2_gazebo_sim/shared_map_fuser.py'
-    '/go2w_control/lib/go2w_control/reactive_nav.py'
+    '/go2w_control/lib/go2w_control/default_nav.py'
     '/go2w_control/lib/go2w_control/autonomy_enabler.py'
     '/go2w_perception/lib/go2w_perception/twist_bridge.py'
     '/go2w_control/lib/go2w_control/go2w_hybrid_cmd_router.py'
@@ -123,7 +123,7 @@ fi
 # CPU budget note (dual Go2W = ~50 processes):
 #   gzserver alone uses 1+ cores.  gzclient + rviz add 1-2 more.
 #   Two full CHAMP stacks (controller_manager @250Hz, RSP @200Hz,
-#   reactive_nav @20Hz, EKFs, lidar, mapper, frontier, hybrid router)
+#   default_nav @20Hz, EKFs, lidar, mapper, frontier, hybrid router)
 #   easily saturate a 4-core machine.
 #
 #   Defaults below disable the GUI/RViz to keep headless runs stable.

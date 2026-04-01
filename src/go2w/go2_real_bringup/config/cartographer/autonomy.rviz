@@ -121,7 +121,7 @@ Visualization Manager:
         Value: /robot/scan_3d
       Use Fixed Frame: true
       Value: true
-    # ── Planned path (A* from reactive_nav) ──
+    # ── Planned path (A* from default_nav) ──
     - Alpha: 1
       Buffer Length: 1
       Class: rviz_default_plugins/Path

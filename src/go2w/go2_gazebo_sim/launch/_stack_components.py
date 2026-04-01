@@ -11,7 +11,7 @@ from modules.control import (
     build_gazebo_frontier_visual_node,
     build_goalpoint_bridge_node,
     build_motion_monitor_node,
-    build_reactive_nav_node,
+    build_default_nav_node,
     build_wall_checker_node,
 )
 from modules.navigation import (
@@ -31,7 +31,7 @@ __all__ = [
     "build_wall_checker_node",
     "build_geometric_frontier_node",
     "build_simple_scan_mapper_node",
-    "build_reactive_nav_node",
+    "build_default_nav_node",
     "build_goalpoint_bridge_node",
     "build_frontier_recovery_node",
     "build_motion_monitor_node",

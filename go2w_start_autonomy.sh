@@ -5,6 +5,7 @@
 # Usage: ./go2w_start_autonomy.sh                    # default (scan mapper, OA disabled)
 #        ./go2w_start_autonomy.sh scan false         # scan mapper, OA disabled (api_id=1008)
 #        ./go2w_start_autonomy.sh carto_binary false # Cartographer prob map -> binary /robot/map
+#        ./go2w_start_autonomy.sh carto_2d false     # Cartographer 2D occupancy grid + 3D OctoMap viz
 #        ./go2w_start_autonomy.sh octomap true       # octomap mapper, OA enabled
 #        ./go2w_start_autonomy.sh elevation false    # elevation mapper, OA disabled
 #        ./go2w_start_autonomy.sh stop               # kill all autonomy processes
@@ -18,7 +19,7 @@
 #     → [scan] pointcloud_to_laserscan → simple_scan_mapper → /robot/map
 #     → [carto_binary] probability_grid_binarizer → /robot/map
 #     → CFPA2 frontier exploration → waypoints
-#     → reactive_nav (A* + local avoidance) → /cmd_vel
+#     → default_nav (A* + local avoidance) → /cmd_vel
 #     → Unitree obstacle avoidance API (api_id=1003)
 #     → frontier_3d_markers → /frontier_cylinders (RViz)
 #
@@ -69,7 +70,7 @@ if [[ "$MAPPER_TYPE" == "stop" ]]; then
   pkill -9 -f cartographer_node 2>/dev/null || true
   pkill -9 -f cartographer_occupancy 2>/dev/null || true
   pkill -9 -f transform_everything 2>/dev/null || true
-  pkill -9 -f reactive_nav 2>/dev/null || true
+  pkill -9 -f default_nav 2>/dev/null || true
   pkill -9 -f cfpa2 2>/dev/null || true
   pkill -9 -f carto_odom_bridge 2>/dev/null || true
   pkill -9 -f twist_bridge 2>/dev/null || true
@@ -89,10 +90,10 @@ fi
 
 # ── Validate mapper type ──────────────────────────────────────────
 case "$MAPPER_TYPE" in
-  scan|carto_binary|octomap|elevation) ;;
+  scan|carto_binary|carto_2d|octomap|elevation) ;;
   *)
     echo "ERROR: Unknown mapper type '$MAPPER_TYPE'"
-    echo "Valid options: scan (default), carto_binary, octomap, elevation"
+    echo "Valid options: scan (default), carto_binary, carto_2d, octomap, elevation"
     exit 1
     ;;
 esac
@@ -171,10 +172,11 @@ echo "    transform_everything → Cartographer 3D → TF"
 case "$MAPPER_TYPE" in
   scan)     echo "    → pointcloud_to_laserscan → scan_mapper → /robot/map" ;;
   carto_binary) echo "    → cartographer_occupancy_grid_node → /robot/map_prob → probability_grid_binarizer → /robot/map" ;;
+  carto_2d) echo "    → Cartographer 2D occupancy grid → /robot/map_prob → binarizer → /robot/map" ;;
   octomap)  echo "    → octomap (3D→2D projection) → /robot/map" ;;
   elevation) echo "    → elevation → traversability → /robot/map" ;;
 esac
-echo "    → CFPA2 frontiers → reactive_nav → cmd_vel"
+echo "    → CFPA2 frontiers → default_nav → cmd_vel"
 if [[ "$OBSTACLE_AVOIDANCE" == "true" ]]; then
   echo "    → Unitree obstacle avoidance (api_id=1003)"
 else
@@ -190,7 +192,7 @@ echo "  Cleaning up stale processes..."
 pkill -9 -f cartographer_node 2>/dev/null || true
 pkill -9 -f cartographer_occupancy 2>/dev/null || true
 pkill -9 -f transform_everything 2>/dev/null || true
-pkill -9 -f reactive_nav 2>/dev/null || true
+pkill -9 -f default_nav 2>/dev/null || true
 pkill -9 -f cfpa2 2>/dev/null || true
 pkill -9 -f carto_odom_bridge 2>/dev/null || true
 pkill -9 -f twist_bridge 2>/dev/null || true
@@ -215,12 +217,18 @@ TE_PID=$!
 ALL_PIDS="$TE_PID"
 sleep 2
 
-# ── 2) Cartographer 3D SLAM ──────────────────────────────────────
+# ── 2) Cartographer SLAM ─────────────────────────────────────────
 CARTO_CFG="$REPO_ROOT/src/go2_real_bringup/config/cartographer"
-echo "  [2/7] Starting Cartographer 3D..."
+if [[ "$MAPPER_TYPE" == "carto_2d" ]]; then
+  CARTO_LUA="go2w_2d_mapping.lua"
+  echo "  [2/7] Starting Cartographer 2D (free-space carving for nav map)..."
+else
+  CARTO_LUA="go2w_3d_mapping.lua"
+  echo "  [2/7] Starting Cartographer 3D..."
+fi
 ros2 run cartographer_ros cartographer_node \
   -configuration_directory "$CARTO_CFG" \
-  -configuration_basename go2w_3d_mapping.lua \
+  -configuration_basename "$CARTO_LUA" \
   --ros-args \
   -r points2:=/utlidar/transformed_cloud \
   -r imu:=/utlidar/transformed_raw_imu \
@@ -254,6 +262,12 @@ case "$MAPPER_TYPE" in
 
   carto_binary)
     echo "  [4/7] Mapper: Cartographer probability grid -> binary /robot/map"
+    EXTERNAL_MAPPER="false"
+    LAUNCH_MAP_BACKEND="carto_binary"
+    ;;
+
+  carto_2d)
+    echo "  [4/7] Mapper: Cartographer 2D occupancy grid -> binarizer -> /robot/map"
     EXTERNAL_MAPPER="false"
     LAUNCH_MAP_BACKEND="carto_binary"
     ;;
@@ -307,7 +321,7 @@ ros2 run octomap_server octomap_server_node \
 OCTO_PID=$!
 ALL_PIDS="$ALL_PIDS $OCTO_PID"
 
-# ── 6) Navigation stack (CFPA2/TARE + reactive_nav + obstacle avoidance) ──
+# ── 6) Navigation stack (CFPA2/TARE + default_nav + obstacle avoidance) ──
 echo "  [6/7] Launching navigation stack..."
 ros2 launch go2_real_bringup "$NAV_LAUNCH_FILE" \
   robot_namespace:=robot \

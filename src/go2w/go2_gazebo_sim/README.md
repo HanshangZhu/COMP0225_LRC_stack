@@ -75,7 +75,7 @@ Single-robot CMU-style stack (SLAM + frontier + local planner + sport API publis
 ros2 launch go2_gazebo_sim go2_l_corridor_cmu_frontier_local.launch.py
 ```
 
-Single-Go2W real-robot CFPA2 stack (CMU SLAM backend + single-robot CFPA2 + reactive_nav + joystick fallback):
+Single-Go2W real-robot CFPA2 stack (CMU SLAM backend + single-robot CFPA2 + default_nav + joystick fallback):
 
 ```bash
 ros2 launch go2_real_bringup single_go2w_real_cfpa2.launch.py

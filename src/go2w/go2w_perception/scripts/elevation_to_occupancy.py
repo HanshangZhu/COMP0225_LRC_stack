@@ -3,7 +3,7 @@
 
 Subscribes to a grid_map topic with an 'elevation' layer, classifies cells
 by slope/step-height into traversable vs obstacle, and publishes a standard
-OccupancyGrid so the downstream nav stack (CFPA2 + reactive_nav) works unchanged.
+OccupancyGrid so the downstream nav stack (CFPA2 + default_nav) works unchanged.
 """
 
 import math

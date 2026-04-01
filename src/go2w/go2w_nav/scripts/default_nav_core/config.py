@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 
 
 @dataclass
-class ReactiveNavConfig:
+class DefaultNavConfig:
     max_linear_speed: float = 0.35
     max_angular_speed: float = 0.8
     goal_tolerance: float = 0.8
@@ -105,7 +105,7 @@ class ReactiveNavConfig:
         self.planner_cells = max(31, planner_cells | 1)
 
     @classmethod
-    def from_node(cls, node) -> "ReactiveNavConfig":
+    def from_node(cls, node) -> "DefaultNavConfig":
         defaults = cls()
         param_defaults = {
             "max_linear_speed": defaults.max_linear_speed,

@@ -136,7 +136,7 @@ Standard ROS2 path:
 - `/registered_scan_reliable` -> `pointcloud_to_laserscan` -> `/scan_3d`
 - `/scan_3d` + `/odom/nav` -> `simple_scan_mapper_cpp` -> `/map`
 - frontier node -> waypoint topic (`/way_point` or `/way_point_raw` depending on profile/backend)
-- `reactive_nav.py` consumes waypoint + scan + odom and publishes `/cmd_vel_stamped`
+- `default_nav.py` consumes waypoint + scan + odom and publishes `/cmd_vel_stamped`
 - `twist_bridge.py` converts `/cmd_vel_stamped` -> `/cmd_vel`
 
 SLAM/odom source:
@@ -355,7 +355,7 @@ robot_a pipeline
 /robot_a/qos_bridge
 /robot_a/pointcloud_to_laserscan
 /robot_a/simple_scan_mapper_cpp
-/robot_a/reactive_nav
+/robot_a/default_nav
 /robot_a/p3d_base_controller_robot_a
 /robot_a/gt_odom_relay
 /cfpa2_coordinator
@@ -367,7 +367,7 @@ robot_a pipeline
 /robot_b/qos_bridge
 /robot_b/pointcloud_to_laserscan
 /robot_b/simple_scan_mapper_cpp
-/robot_b/reactive_nav
+/robot_b/default_nav
 /robot_b/p3d_base_controller_robot_b
 /robot_b/gt_odom_relay
 /robot_b/autonomy_enabler
@@ -379,7 +379,7 @@ RViz/consumers
 Live node snapshot (headless run, same backend/flags) included these runtime nodes:
 
 Core orchestration: /cfpa2_coordinator, /shared_map_fuser, /robot_status_monitor, /dual_map_coverage_visualizer, /gazebo, /gazebo/gazebo_ros_state
-robot_a: robot_state_publisher, quadruped_controller_node, state_estimation_node, base_to_footprint_ekf, footprint_to_odom_ekf, controller_manager, robot_a_joint_states_controller, robot_a_joint_group_effort_controller, contacts_sensor, gazebo_ros2_control_robot_a, gazebo_ros_3d_lidar_robot_a, gazebo_ros_front_laserscan_robot_a, imu_plugin_robot_a, p3d_base_controller_robot_a, qos_bridge, pointcloud_to_laserscan, simple_scan_mapper_cpp, gt_odom_relay, autonomy_enabler, reactive_nav, twist_bridge, stand_up_slowly
+robot_a: robot_state_publisher, quadruped_controller_node, state_estimation_node, base_to_footprint_ekf, footprint_to_odom_ekf, controller_manager, robot_a_joint_states_controller, robot_a_joint_group_effort_controller, contacts_sensor, gazebo_ros2_control_robot_a, gazebo_ros_3d_lidar_robot_a, gazebo_ros_front_laserscan_robot_a, imu_plugin_robot_a, p3d_base_controller_robot_a, qos_bridge, pointcloud_to_laserscan, simple_scan_mapper_cpp, gt_odom_relay, autonomy_enabler, default_nav, twist_bridge, stand_up_slowly
 robot_b: same set with _b
 Script default also adds RViz node (rviz2_mtare_shared) because rviz:=true in the script.
 Script default also starts gzclient process because gui:=true (not a ROS node).

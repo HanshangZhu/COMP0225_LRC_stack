@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Thin ROS adapter for layered reactive navigation."""
+"""Thin ROS adapter for default navigation (A* grid + local avoidance)."""
 
 import json
 import math
@@ -13,16 +13,16 @@ from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Empty, Int8, String
 from visualization_msgs.msg import Marker
 
-from reactive_nav_core import GoalState, NavRuntimeState, ReactiveNavConfig, ReactiveNavCoordinator, RobotState
-from reactive_nav_core.grid_planner import AsyncGridPlanner, OccGridInfo
+from default_nav_core import GoalState, NavRuntimeState, DefaultNavConfig, DefaultNavCoordinator, RobotState
+from default_nav_core.grid_planner import AsyncGridPlanner, OccGridInfo
 
 
-class ReactiveNav(Node):
+class DefaultNav(Node):
     def __init__(self) -> None:
-        super().__init__("reactive_nav")
+        super().__init__("default_nav")
 
-        self.cfg = ReactiveNavConfig.from_node(self)
-        self.coordinator = ReactiveNavCoordinator(self.cfg)
+        self.cfg = DefaultNavConfig.from_node(self)
+        self.coordinator = DefaultNavCoordinator(self.cfg)
 
         self.robot_state = RobotState()
         self.goal_state = GoalState()
@@ -698,7 +698,7 @@ class ReactiveNav(Node):
 
 def main(args=None) -> None:
     rclpy.init(args=args)
-    node = ReactiveNav()
+    node = DefaultNav()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

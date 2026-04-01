@@ -214,6 +214,8 @@ class MapRendererNode(Node):
                 "height": h,
                 "resolution": res,
                 "origin": [round(ox, 2), round(oy, 2)],
+                "known_cells": int(np.count_nonzero(grid != -1)),
+                "free_cells": int(np.count_nonzero((grid >= 0) & (grid < 50))),
             },
         }
         json_msg = String()

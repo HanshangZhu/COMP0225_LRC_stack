@@ -69,7 +69,7 @@ if [[ "$MAPPER_TYPE" == "stop" ]]; then
   pkill -9 -f cartographer_node 2>/dev/null || true
   pkill -9 -f cartographer_occupancy 2>/dev/null || true
   pkill -9 -f transform_everything 2>/dev/null || true
-  pkill -9 -f reactive_nav 2>/dev/null || true
+  pkill -9 -f default_nav 2>/dev/null || true
   pkill -9 -f cfpa2 2>/dev/null || true
   pkill -9 -f carto_odom_bridge 2>/dev/null || true
   pkill -9 -f twist_bridge 2>/dev/null || true
@@ -173,7 +173,7 @@ echo "  Cleaning up stale processes..."
 pkill -9 -f cartographer_node 2>/dev/null || true
 pkill -9 -f cartographer_occupancy 2>/dev/null || true
 pkill -9 -f transform_everything 2>/dev/null || true
-pkill -9 -f reactive_nav 2>/dev/null || true
+pkill -9 -f default_nav 2>/dev/null || true
 pkill -9 -f cfpa2 2>/dev/null || true
 pkill -9 -f carto_odom_bridge 2>/dev/null || true
 pkill -9 -f twist_bridge 2>/dev/null || true

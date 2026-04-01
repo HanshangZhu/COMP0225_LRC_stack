@@ -87,7 +87,7 @@ def _launch_setup(context):
         go2_gazebo_pkg, "launch", "single_go2w_gazebo_cfpa2.launch.py"
     )
     go2w_config_pkg = get_package_share_directory("go2w_config")
-    nav_config_path = os.path.join(go2w_config_pkg, "config", "nav", "reactive_nav_vlm.yaml")
+    nav_config_path = os.path.join(go2w_config_pkg, "config", "nav", "default_nav_vlm.yaml")
 
     actions.append(
         IncludeLaunchDescription(
@@ -176,7 +176,7 @@ def _launch_setup(context):
     # NOTE:
     # We do not use Cartographer's occupancy grid by default for VLM exploration.
     # In this stack its 3D projected map tends to be "occupied + unknown" with
-    # almost no explicit free cells, so CFPA2/reactive_nav cannot extract
+    # almost no explicit free cells, so CFPA2/default_nav cannot extract
     # frontiers or plan from it reliably. We keep Cartographer for pose/TF, and
     # use simple_scan_mapper_cpp by default to build a proper free/occupied/unknown
     # 2D exploration map from scan_3d + Cartographer pose.

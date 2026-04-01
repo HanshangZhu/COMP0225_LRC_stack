@@ -28,7 +28,7 @@
 
 **Symptom:** Paths curved backwards, went through walls. Log: `incompatible QoS ... Last incompatible policy: DURABILITY`.
 
-**Root Cause:** Mapper published with VOLATILE, reactive_nav subscribed with TRANSIENT_LOCAL → silent message drop → global A* never ran → fell back to local scan-based planner (tiny grid, no memory).
+**Root Cause:** Mapper published with VOLATILE, default_nav subscribed with TRANSIENT_LOCAL → silent message drop → global A* never ran → fell back to local scan-based planner (tiny grid, no memory).
 
 **Fix:** Mapper publisher changed to `TRANSIENT_LOCAL` durability.
 
@@ -44,7 +44,7 @@
 
 ### Improvement: Path Shortcut Logic (IMPLEMENTED ✅)
 
-**Fix:** O(n) closest-point pruning in `reactive_nav_core/planner.py`. If robot is near waypoint #5, skip #1-#4 instead of backtracking.
+**Fix:** O(n) closest-point pruning in `default_nav_core/planner.py`. If robot is near waypoint #5, skip #1-#4 instead of backtracking.
 
 ---
 
@@ -56,7 +56,7 @@
 | `go2_gazebo_sim/config/nav/simple_scan_mapper_single_go2w.yaml` | Asymmetric log-odds scoring (3:1), tighter clamping |
 | `go2_gazebo_sim/config/slam/pointlio_gazebo.yaml` | Finer voxel filters, more iterations, body cloud enabled |
 | `go2_gazebo_sim/launch/single_go2w_gazebo_cfpa2.launch.py` | Fast-LIO cloud rewiring, static TF imu→body, topic remapping |
-| `go2w_control/scripts/reactive_nav_core/planner.py` | Path shortcut logic (closest-point pruning) |
+| `go2w_control/scripts/default_nav_core/planner.py` | Path shortcut logic (closest-point pruning) |
 
 ---
 

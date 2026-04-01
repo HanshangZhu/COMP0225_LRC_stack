@@ -161,7 +161,7 @@ Visualization Manager:
       Length: 0.3
       Line Style: Billboards
       Line Width: 0.05
-      Name: PlannedPath
+      Name: LocalPlannerPath
       Offset:
         X: 0
         Y: 0
@@ -177,6 +177,33 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /robot/path
+      Value: true
+    - Alpha: 1
+      Buffer Length: 1
+      Class: rviz_default_plugins/Path
+      Color: 0; 255; 0
+      Enabled: true
+      Head Diameter: 0.2
+      Head Length: 0.2
+      Length: 0.3
+      Line Style: Billboards
+      Line Width: 0.06
+      Name: DefaultNavPath
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0
+      Pose Color: 0; 255; 0
+      Pose Style: None
+      Radius: 0.03
+      Shaft Diameter: 0.1
+      Shaft Length: 0.1
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /robot/planned_path
       Value: true
     - Alpha: 1
       Buffer Length: 1
@@ -297,6 +324,19 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /vlm/skeleton_markers
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: ArtifactMarkers
+      Namespaces:
+        artifact_cubes: true
+        artifact_labels: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /vlm/artifact_markers
       Value: true
   Enabled: true
   Global Options:

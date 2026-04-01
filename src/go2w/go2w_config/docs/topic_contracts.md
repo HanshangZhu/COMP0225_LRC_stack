@@ -80,7 +80,7 @@ Namespace is set by the launch file via `PushRosNamespace` or `namespace=`.
 
 Teammate odometry for multi-robot avoidance is parameterized:
 ```yaml
-# In reactive_nav config:
+# In default_nav config:
 teammate_odom_topics: ["/robot_b/odom/nav"]
 ```
 Never hardcoded in node source code.

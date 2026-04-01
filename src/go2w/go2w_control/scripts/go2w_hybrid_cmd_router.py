@@ -113,13 +113,17 @@ class Go2WHybridCmdRouter(Node):
         if not self._is_recent(now_sec) or self._is_idle(cmd):
             return "idle"
 
-        linear_x = abs(float(cmd.linear.x))
+        raw_linear_x = float(cmd.linear.x)
+        linear_x = abs(raw_linear_x)
         linear_y = abs(float(cmd.linear.y))
         angular_z = abs(float(cmd.angular.z))
         curvature = angular_z / max(linear_x, 0.05)
 
+        # Wheel mode only for forward straight-line driving; reverse uses
+        # legged gait which has better traction and stability going backward.
         if (
-            linear_x >= self.thresholds.wheel_linear
+            raw_linear_x > 0
+            and linear_x >= self.thresholds.wheel_linear
             and linear_y <= self.thresholds.wheel_lateral
             and angular_z <= self.thresholds.wheel_angular
             and curvature <= self.thresholds.wheel_curvature

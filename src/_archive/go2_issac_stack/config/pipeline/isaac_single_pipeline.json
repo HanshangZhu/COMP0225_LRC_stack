@@ -15,7 +15,7 @@
     }
   },
   "navigation": {
-    "reactive_nav": {
+    "default_nav": {
       "params": {
         "max_linear_speed": 0.28,
         "obstacle_slow_dist": 0.85,

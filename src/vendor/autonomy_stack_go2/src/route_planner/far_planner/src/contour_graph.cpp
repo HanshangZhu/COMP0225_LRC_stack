@@ -27,10 +27,9 @@ void ContourGraph::UpdateContourGraph(const NavNodePtr& odom_node_ptr,
     odom_node_ptr_ = odom_node_ptr;
     this->ClearContourGraph();
     for (const auto& poly : filtered_contours) {
-        // Skip oversized contour polygons — these are typically sensor-boundary
-        // artifacts (terrain analysis noise at the edge of range), not real
-        // obstacles.  Real obstacles (walls, pillars) produce compact polygons.
-        // Compute bounding-box diagonal; skip if > 2× sensor_range.
+        // Skip oversized contour polygons — catch extreme sensor-boundary
+        // artifacts, not real room boundaries.  Use 3× sensor_range so that
+        // accumulated room-scale polygons (~10-20m diagonal) pass through.
         if (poly.size() > 2) {
             float minx = poly[0].x, maxx = poly[0].x;
             float miny = poly[0].y, maxy = poly[0].y;
@@ -41,18 +40,8 @@ void ContourGraph::UpdateContourGraph(const NavNodePtr& odom_node_ptr,
                 if (p.y > maxy) maxy = p.y;
             }
             float diag = std::sqrt((maxx-minx)*(maxx-minx) + (maxy-miny)*(maxy-miny));
-            if (diag > FARUtil::kSensorRange) {
-                // ── DIAG STAGE 4: polygon filter ────────────
-                {
-                  static int _diag_ctr4 = 0;
-                  if (++_diag_ctr4 % 5 == 1) {
-                    std::cout << "[DIAG4] Polygon filtered: diag " << diag 
-                              << " > sensor_range " << FARUtil::kSensorRange 
-                              << " (vertices: " << poly.size() << ")" << std::endl;
-                  }
-                }
-                // ────────────────────────────────────────────
-                continue;  // Skip this polygon — too large to be a real obstacle
+            if (diag > FARUtil::kSensorRange * 3.0f) {
+                continue;  // Skip this polygon — too large to be real
             }
         }
         PolygonPtr new_poly_ptr = NULL;

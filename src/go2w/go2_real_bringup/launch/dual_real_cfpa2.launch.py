@@ -43,11 +43,11 @@ def _robot_frames(namespace: str) -> tuple[str, str, str]:
     return (f"{ns}_map", f"{ns}_body", f"{ns}_base_link")
 
 
-def _reactive_nav_yaml(variant: str) -> str:
+def _default_nav_yaml(variant: str) -> str:
     go2w_control_pkg = get_package_share_directory("go2w_control")
     if variant == "go2w":
-        return os.path.join(go2w_control_pkg, "config", "reactive_nav_single_go2w.yaml")
-    return os.path.join(go2w_control_pkg, "config", "reactive_nav_single.yaml")
+        return os.path.join(go2w_control_pkg, "config", "default_nav_single_go2w.yaml")
+    return os.path.join(go2w_control_pkg, "config", "default_nav_single.yaml")
 
 
 def _teleop_yaml(_variant: str) -> str:
@@ -72,7 +72,7 @@ def _add_robot_stack(
     nav_pkg = get_package_share_directory("go2_nav_algorithms")
     go2_gazebo_pkg = get_package_share_directory("go2_gazebo_sim")
 
-    reactive_nav_profile = _reactive_nav_yaml(variant)
+    default_nav_profile = _default_nav_yaml(variant)
     teleop_config = _teleop_yaml(variant)
     mapper_profile = os.path.join(go2_gazebo_pkg, "config", "nav", "simple_scan_mapper_single_go2w.yaml")
 
@@ -206,11 +206,11 @@ def _add_robot_stack(
     actions.append(
         Node(
             package="go2w_nav",
-            executable="reactive_nav.py",
+            executable="default_nav.py",
             namespace=ns,
-            name="reactive_nav",
+            name="default_nav",
             parameters=[
-                reactive_nav_profile,
+                default_nav_profile,
                 {"use_sim_time": False},
                 {
                     "max_linear_speed": 0.30,
