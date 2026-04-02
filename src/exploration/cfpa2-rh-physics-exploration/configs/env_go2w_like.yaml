@@ -1,0 +1,14 @@
+environment:
+  map_name: go2w_like_indoor
+  map_type: bottleneck_rooms
+  map_width: 100
+  map_height: 76
+  random_seed: 42
+  obstacle_density: 0.04
+robots:
+  start_positions:
+    - [6, 6]
+    - [12, 6]
+  sensor_fov_deg: 240.0
+  max_speed_cells_per_step: 1.0
+  turn_rate_deg_per_step: 30.0

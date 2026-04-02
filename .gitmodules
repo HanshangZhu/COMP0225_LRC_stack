@@ -9,10 +9,6 @@
 	path = src/vendor/BALM
 	url = https://github.com/hku-mars/BALM.git
 
-[submodule "src/go2_ros2_sdk"]
-	path = src/vendor/go2_ros2_sdk
-	url = https://github.com/abizovnuralem/go2_ros2_sdk.git
-
 [submodule "src/librealsense"]
 	path = src/vendor/librealsense
 	url = https://github.com/IntelRealSense/librealsense.git

@@ -1,0 +1,23 @@
+planning:
+  planner_name: macro_frontier_explorer
+  topk_candidate_limit: 8
+  local_planner:
+    type: maze_aware_astar
+    obstacle_cost_radius: 1
+    obstacle_cost_weight: 0.08
+    turn_cost_weight: 0.03
+    clearance_probe_radius: 3
+    clearance_bias_weight: 0.30
+  macro_frontier_explorer:
+    candidate_topk: 8
+    min_travel_steps: 5
+    information_gain_radius: 6
+    branch_inner_radius: 3
+    branch_outer_radius: 8
+    commitment_margin: 1.2
+    w_information_gain: 1.0
+    w_cluster_size: 0.08
+    w_branch_opening: 0.16
+    w_travel_cost: 0.45
+    w_revisit_penalty: 0.28
+    w_commitment_bonus: 0.40

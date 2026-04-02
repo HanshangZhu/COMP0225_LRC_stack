@@ -1,0 +1,30 @@
+frontier:
+  min_cluster_size: 1
+  target_frontier_count_min: 4
+  target_frontier_count_max: 16
+  representative_min_distance: 4.0
+
+planning:
+  planner_name: single_robot_frontier
+  hysteresis_margin: 0.25
+  local_planner:
+    type: maze_aware_astar
+    obstacle_cost_radius: 1
+    obstacle_cost_weight: 0.08
+    turn_cost_weight: 0.03
+    clearance_probe_radius: 3
+    clearance_bias_weight: 0.30
+  weights:
+    w_ig: 1.0
+    w_cost: 0.48
+    w_switch: 0.40
+    w_turn: 0.08
+  single_robot_frontier:
+    min_goal_steps: 3
+    preferred_goal_steps: 8
+    max_cells_per_cluster_eval: 32
+    w_cluster_size: 0.18
+    w_goal_progress: 0.55
+
+predictor:
+  type: path_follow

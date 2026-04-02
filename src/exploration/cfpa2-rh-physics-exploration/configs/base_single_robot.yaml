@@ -1,0 +1,146 @@
+experiment:
+  name: go2w_single_robot_exploration
+  output_root: outputs
+  global_animation_dir: outputs/animations
+  save_animation: true
+  animation_format: mp4
+  enable_live_plot: false
+  save_step_logs: true
+
+environment:
+  map_name: go2w_maze_single
+  map_type: corridor_maze
+  map_width: 96
+  map_height: 72
+  obstacle_density: 0.04
+  random_seed: 42
+  predefined_map_path: null
+
+robots:
+  num_robots: 1
+  start_positions:
+    - [4, 4]
+  start_headings_deg:
+    - 0.0
+  footprint_radius_cells: 1
+  clearance_cells: 0
+  max_speed_cells_per_step: 1.0
+  turn_rate_deg_per_step: 35.0
+  turning_pause_if_large_yaw: true
+  turning_pause_threshold_deg: 30.0
+  motion_uncertainty_prob: 0.02
+  slowdown_near_obstacle: true
+  obstacle_slowdown_distance: 1
+  obstacle_slowdown_prob: 0.20
+  sensor_range: 8
+  sensor_fov_deg: 270.0
+  use_line_of_sight: true
+  observation_miss_prob: 0.01
+
+frontier:
+  neighborhood: 8
+  min_cluster_size: 2
+  target_frontier_count_min: 3
+  target_frontier_count_max: 10
+  representative_min_distance: 6.0
+  ig_radius: 6
+
+planning:
+  planner_name: cfpa2
+  topk_candidate_limit: 8
+  reassign_on_reach: true
+  reservation_ttl: 16
+  hysteresis_margin: 0.35
+  weights:
+    w_ig: 1.0
+    w_cost: 0.55
+    w_switch: 0.25
+    w_turn: 0.10
+  penalties:
+    lambda_overlap: 0.55
+    sigma_overlap: null
+    mu_interference: 0.20
+    interference_distance: 2.5
+  rollout:
+    horizon: 4
+    gamma: 0.88
+    virtual_reveal_radius: 4
+    virtual_gain_decay: 0.95
+    score_mode: hybrid
+    rollout_weight: 0.05
+    immediate_weight: 1.0
+    future_weight: 0.20
+    future_only_weight: 1.0
+    virtual_sensor_range: null
+    virtual_sensor_fov_deg: null
+    virtual_use_line_of_sight: true
+    virtual_unknown_blocks_los: false
+    teammate_shared_gain_ratio: 0.35
+    frontier_consumption_weight: 0.18
+    frontier_consumption_decay: 0.99
+    reassign_coupling_passes: 1
+    frontier_density_radius: 5
+    branch_inner_radius: 4
+    branch_outer_radius: 8
+    teammate_safe_distance: 6.0
+    reassign_w_ig: 1.0
+    reassign_w_distance: 0.40
+    reassign_w_density: 0.45
+    reassign_w_branch: 0.22
+    reassign_w_teammate: 0.80
+    reassign_w_reservation: 1.0
+    lambda_corridor_occupancy: 0.10
+    lambda_narrow_blocking: 0.16
+    lambda_path_crossing: 0.08
+    lambda_waiting_time: 0.08
+    lambda_uncertainty_risk: 0.00
+    uncertainty_gain_discount: 0.00
+    uncertainty_clip: 2.0
+    corridor_near_distance: 2.5
+    blocking_window: 2
+    waiting_window: 2
+
+predictor:
+  type: path_follow
+  horizon_steps: 6
+  constant_velocity:
+    default_speed_cells_per_step: 0.8
+  physics_residual:
+    enabled: false
+    weight_file: null
+    residual_scale: 0.35
+    occupancy_patch_radius: 4
+    hidden_dims: [128, 128]
+    device: auto
+    enable_uncertainty: true
+    uncertainty_ensemble_samples: 5
+    uncertainty_feature_noise_std: 0.03
+    uncertainty_base: 0.03
+    uncertainty_scale: 1.0
+    uncertainty_max: 2.0
+
+analysis:
+  enable_predictor_decision_probe: false
+  decision_probe_predictors: [path_follow, physics_residual]
+  decision_probe_max_per_episode: 40
+
+replanning:
+  enable_event_replan: true
+  periodic_replan_interval: 10
+  frontier_change_threshold: 0.22
+  stuck_threshold: 8
+  invalidation_path_threshold: 3
+  invalidation_distance_threshold: 2.0
+
+termination:
+  coverage_threshold: 0.95
+  max_steps: 5000
+  step_dt: 1.0
+
+animation:
+  fps: 8
+  figsize: [12.0, 7.2]
+  show_frontier_cells: false
+  show_sensor_fov: true
+  save_gif: false
+  save_mp4: true

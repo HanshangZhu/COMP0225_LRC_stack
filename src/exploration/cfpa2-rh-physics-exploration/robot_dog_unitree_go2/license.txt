@@ -1,0 +1,11 @@
+Model Information:
+* title:	Robot dog Unitree Go2
+* source:	https://sketchfab.com/3d-models/robot-dog-unitree-go2-7af84eb9ba834f27bbac818a8b96e2da
+* author:	C. Yamahata (https://sketchfab.com/cyamahat)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Robot dog Unitree Go2" (https://sketchfab.com/3d-models/robot-dog-unitree-go2-7af84eb9ba834f27bbac818a8b96e2da) by C. Yamahata (https://sketchfab.com/cyamahat) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)

@@ -1,0 +1,35 @@
+planning:
+  planner_name: hybrid_explorer
+  topk_candidate_limit: 5
+  hysteresis_margin: 0.55
+  weights:
+    w_cost: 0.62
+    w_switch: 0.35
+  frontier_policy:
+    type: frontiernet_proxy
+    branch_radius: 6
+    density_radius: 10.0
+    clearance_radius: 1
+    w_cluster_size: 0.04
+    w_branch_gain: 0.01
+    w_density: 0.08
+    w_clearance: 0.30
+    w_heading_alignment: 0.10
+  local_planner:
+    type: maze_aware_astar
+    obstacle_cost_radius: 1
+    obstacle_cost_weight: 0.08
+    turn_cost_weight: 0.03
+    clearance_probe_radius: 3
+    clearance_bias_weight: 0.30
+  rollout:
+    horizon: 4
+    gamma: 0.90
+    virtual_reveal_radius: 4
+    virtual_gain_decay: 0.95
+    score_mode: hybrid
+    immediate_weight: 1.00
+    future_weight: 0.22
+predictor:
+  type: path_follow
+  horizon_steps: 6

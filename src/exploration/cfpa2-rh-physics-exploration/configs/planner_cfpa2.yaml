@@ -1,0 +1,6 @@
+planning:
+  planner_name: cfpa2
+  rollout:
+    horizon: 1
+predictor:
+  type: path_follow

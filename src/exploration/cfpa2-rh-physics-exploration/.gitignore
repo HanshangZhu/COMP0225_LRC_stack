@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+.pytest_cache/
+.mypy_cache/
+.env*
+
+# OS/editor
+.DS_Store
+.vscode/
+.idea/
+
+# Generated outputs
+outputs/
+cfpa2_demo/outputs/
+
+# Build/runtime artifacts
+*.log
+
+# Training artifacts
+training/datasets/
+training/models/

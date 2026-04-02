@@ -1,0 +1,28 @@
+planning:
+  planner_name: active_slam_explorer
+  topk_candidate_limit: 8
+  local_planner:
+    type: maze_aware_astar
+    obstacle_cost_radius: 1
+    obstacle_cost_weight: 0.08
+    turn_cost_weight: 0.03
+    clearance_probe_radius: 3
+    clearance_bias_weight: 0.30
+  active_slam_explorer:
+    candidate_topk: 8
+    information_gain_radius: 6
+    min_information_gain: 3.0
+    target_obstacle_radius: 1
+    max_target_obstacles: 8.0
+    uncertainty_inner_radius: 3
+    uncertainty_outer_radius: 8
+    loop_closure_radius: 4
+    commitment_margin: 0.8
+    w_information_gain: 1.0
+    w_travel_cost: 0.52
+    w_uncertainty_reduction: 0.16
+    w_loop_closure: 0.14
+    w_frontier_size: 0.04
+    w_revisit_penalty: 0.28
+    w_target_obstacle_penalty: 0.03
+    w_commitment_bonus: 0.25

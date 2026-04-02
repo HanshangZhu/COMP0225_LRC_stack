@@ -1,0 +1,50 @@
+planning:
+  planner_name: physics_rh_cfpa2
+  topk_candidate_limit: 6
+  rollout:
+    horizon: 4
+    gamma: 0.88
+    virtual_reveal_radius: 4
+    virtual_gain_decay: 0.95
+    score_mode: hybrid
+    immediate_weight: 1.00
+    future_weight: 0.28
+    teammate_shared_gain_ratio: 0.35
+    frontier_consumption_weight: 0.20
+    frontier_consumption_decay: 0.99
+    reassign_coupling_passes: 1
+    frontier_density_radius: 5
+    branch_inner_radius: 4
+    branch_outer_radius: 8
+    teammate_safe_distance: 6.0
+    reassign_w_ig: 1.0
+    reassign_w_distance: 0.40
+    reassign_w_density: 0.45
+    reassign_w_branch: 0.24
+    reassign_w_teammate: 0.82
+    reassign_w_reservation: 1.0
+    lambda_corridor_occupancy: 0.10
+    lambda_narrow_blocking: 0.16
+    lambda_path_crossing: 0.08
+    lambda_waiting_time: 0.08
+    lambda_uncertainty_risk: 0.10
+    uncertainty_gain_discount: 0.08
+    uncertainty_clip: 2.0
+    corridor_near_distance: 2.5
+    blocking_window: 2
+    waiting_window: 2
+predictor:
+  type: physics_residual
+  horizon_steps: 6
+  physics_residual:
+    enabled: true
+    weight_file: null
+    residual_scale: 0.35
+    occupancy_patch_radius: 4
+    hidden_dims: [128, 128]
+    enable_uncertainty: true
+    uncertainty_ensemble_samples: 5
+    uncertainty_feature_noise_std: 0.03
+    uncertainty_base: 0.03
+    uncertainty_scale: 1.0
+    uncertainty_max: 2.0

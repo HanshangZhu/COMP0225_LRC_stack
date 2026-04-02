@@ -1,0 +1,19 @@
+environment:
+  map_name: narrow_t_dense_branches
+  map_type: narrow_t_dense_branches
+  map_width: 100
+  map_height: 76
+  random_seed: 42
+  obstacle_density: 0.02
+
+robots:
+  start_positions:
+    - [49, 68]
+    - [51, 68]
+  sensor_fov_deg: 300.0
+  observation_miss_prob: 0.0
+
+termination:
+  coverage_threshold: 0.98
+  max_steps: 6000
+  step_dt: 1.0

@@ -1,0 +1,102 @@
+experiment:
+  name: vlm_artifact_exploration
+  output_root: outputs
+  global_animation_dir: outputs/animations
+  save_animation: true
+  animation_format: mp4
+  enable_live_plot: true
+
+environment:
+  map_name: narrow_t_branches
+  map_type: narrow_t_branches
+  map_width: 96
+  map_height: 72
+  obstacle_density: 0.04
+  random_seed: 42
+
+robots:
+  num_robots: 1
+  start_positions:
+    - [4, 4]
+  start_headings_deg:
+    - 0.0
+  footprint_radius_cells: 1
+  clearance_cells: 0
+  max_speed_cells_per_step: 1.0
+  turn_rate_deg_per_step: 35.0
+  turning_pause_if_large_yaw: true
+  turning_pause_threshold_deg: 30.0
+  motion_uncertainty_prob: 0.02
+  slowdown_near_obstacle: true
+  obstacle_slowdown_distance: 1
+  obstacle_slowdown_prob: 0.20
+  sensor_range: 8
+  sensor_fov_deg: 270.0
+  use_line_of_sight: true
+  observation_miss_prob: 0.01
+
+frontier:
+  neighborhood: 8
+  min_cluster_size: 1
+  target_frontier_count_min: 4
+  target_frontier_count_max: 16
+  representative_min_distance: 4.0
+  ig_radius: 6
+
+planning:
+  planner_name: vlm_frontier
+  topk_candidate_limit: 8
+  reassign_on_reach: true
+  reservation_ttl: 16
+  hysteresis_margin: 0.25
+  weights:
+    w_ig: 1.0
+    w_cost: 0.48
+    w_switch: 0.40
+    w_turn: 0.08
+  local_planner:
+    type: maze_aware_astar
+    obstacle_cost_radius: 1
+    obstacle_cost_weight: 0.08
+    turn_cost_weight: 0.03
+    clearance_probe_radius: 3
+    clearance_bias_weight: 0.30
+  single_robot_frontier:
+    min_goal_steps: 3
+    preferred_goal_steps: 8
+    max_cells_per_cluster_eval: 32
+    w_cluster_size: 0.18
+    w_goal_progress: 0.55
+  rollout:
+    horizon: 1
+    score_mode: immediate_only
+
+predictor:
+  type: path_follow
+
+replanning:
+  on_target_reached: true
+  on_path_empty: true
+  on_stuck_steps: 8
+  on_frontier_change: true
+  periodic_steps: 20
+
+termination:
+  coverage_threshold: 0.99
+  max_steps: 3000
+  step_dt: 1.0
+
+animation:
+  fps: 8
+  figsize: [12.0, 7.2]
+  show_frontier_cells: false
+  show_sensor_fov: true
+  save_gif: false
+  save_mp4: true
+
+vlm:
+  enabled: true
+  goal_prompt: "explore the map"
+  backend: grok
+  artifact_count: 1
+  utility_boost: 5.0
